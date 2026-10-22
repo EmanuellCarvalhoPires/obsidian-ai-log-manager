@@ -1,0 +1,70 @@
+/* Status bar, modal and settings styles for AI Log Manager (prefix: ailm-). */
+.ailm-status-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ailm-status-bar-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ailm-status-bar-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ailm-status-bar.ailm-state-connected .ailm-status-bar-icon {
+  color: var(--text-success);
+}
+
+.ailm-status-bar.ailm-state-waiting .ailm-status-bar-icon {
+  color: var(--text-muted);
+}
+
+.ailm-status-bar.ailm-state-error .ailm-status-bar-icon {
+  color: var(--text-error);
+}
+
+.ailm-status-bar:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.ailm-mono {
+  font-family: var(--font-monospace);
+}
+
+.ailm-muted {
+  color: var(--text-muted);
+}
+
+.ailm-modal-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.ailm-status-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+.ailm-status-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ailm-status-connected {
+  color: var(--text-success);
+}
+
+.ailm-status-waiting {
+  color: var(--text-muted);
+}
+
+.ailm-status-error {
+  color: var(--text-error);
+}
