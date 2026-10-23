@@ -77,6 +77,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
   return [
     {
       name: "logs_status",
+      categoria: "logs",
+      tags: ["logs", "conversa", "status"],
+      resumo: "Exibe status do motor de logs de conversas",
+      efeito: "leitura",
+      exposicao: "indice",
       description: "Shows the state of the log engine: mode, watcher, hooks and the latest conversations with their log notes.",
       inputSchema: { type: "object", properties: { ...SESSION_PROP, limit: { type: "number", description: "How many conversations to list (default 10)." } } },
       annotations: { readOnlyHint: true, idempotentHint: true },
@@ -102,6 +107,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
     },
     {
       name: "logs_create",
+      categoria: "logs",
+      tags: ["logs", "conversa", "criar"],
+      resumo: "Cria nota de log de conversa com título customizado",
+      efeito: "cofre",
+      exposicao: "indice",
       description:
         "Creates the log of a conversation if it does not exist yet, with the given title (3 to 8 words, Portuguese, no links, dates or / \\ : * ? \" < > |). " +
         "The engine creates logs by itself, so use this only to choose the title. Does nothing if the log exists.",
@@ -115,6 +125,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
     },
     {
       name: "logs_update",
+      categoria: "logs",
+      tags: ["logs", "conversa", "atualizar"],
+      resumo: "Atualiza nota de log com novas mensagens da sessão",
+      efeito: "cofre",
+      exposicao: "indice",
       description: "Writes the requests and answers that are not in the log yet. Only appends; never changes what is written.",
       inputSchema: { type: "object", properties: { ...SESSION_PROP } },
       annotations: { idempotentHint: true },
@@ -127,6 +142,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
     },
     {
       name: "logs_sync_all",
+      categoria: "logs",
+      tags: ["logs", "conversa", "sincronizar"],
+      resumo: "Reconcilia todas as conversas modificadas recentemente",
+      efeito: "cofre",
+      exposicao: "indice",
       description: "Reconciles every conversation changed since the last reconciliation (what happened while Obsidian was closed).",
       inputSchema: { type: "object", properties: { forcar: { type: "boolean", description: "Reads every transcript again, including ignored ones." } } },
       annotations: { idempotentHint: true },
@@ -145,6 +165,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
     },
     {
       name: "logs_link_project",
+      categoria: "logs",
+      tags: ["logs", "projeto", "vincular"],
+      resumo: "Vincula log de conversa a um projeto de desenvolvimento",
+      efeito: "cofre",
+      exposicao: "indice",
       description: "Links the log of a conversation to a development project (Logs index in `up`, `projeto` and optional `branches`).",
       inputSchema: {
         type: "object",
@@ -172,6 +197,11 @@ export function buildTools(deps: ToolDeps): HubTool[] {
     },
     {
       name: "logs_rename",
+      categoria: "logs",
+      tags: ["logs", "conversa", "renomear"],
+      resumo: "Renomeia nota de log de conversa",
+      efeito: "cofre",
+      exposicao: "indice",
       description: "Renames the log of a conversation (file name and heading).",
       inputSchema: { type: "object", properties: { ...SESSION_PROP, titulo: { type: "string", description: "New title." } }, required: ["titulo"] },
       handler: guard(async (args) => {

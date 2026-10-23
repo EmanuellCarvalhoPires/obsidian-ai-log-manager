@@ -160,6 +160,7 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       onIncompatible: (reason) => new Notice(reason),
       onConnected: (api) => {
         this.unregisterSetupHandler?.();
+        this.syncToolIndex();
         this.unregisterSetupHandler = registerSetupHandler(
           api,
           createSetupHandler({
@@ -460,5 +461,36 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     setIcon(this.statusIconEl, map[status].icon);
     const suffix = this.settings.mode === "observe" ? " (observe)" : "";
     this.statusTextEl.setText(`${t(`core.status.${status}`)}${status === "connected" ? suffix : ""}`);
+  }
+  private syncToolIndex(): void {
+    const api = this.connector?.getApi();
+    if (!api?.toolIndex) return;
+    const deps = {
+      engine: this.engine,
+      locator: this.locator,
+      tracker: this.tracker,
+      store: this.store,
+      hooks: this.hookHandler,
+      dev: this.dev,
+      settings: () => this.settings,
+      runtime: () => ({ watching: this.transcriptWatcher !== undefined, hooksInstalled: this.hooksOk, connected: this.connector.isConnected() }),
+    };
+    const tools = [...buildTools(deps), ...buildDevTools({ dev: this.dev, tracker: this.tracker })];
+    const entries = tools.map((t) => ({
+      name: t.name,
+      title: t.title,
+      description: t.description,
+      inputSchema: t.inputSchema,
+      annotations: t.annotations,
+      categoria: t.categoria,
+      tags: t.tags,
+      resumo: t.resumo,
+      efeito: t.efeito,
+      exposicao: t.exposicao,
+      aprovacao: t.aprovacao,
+    }));
+    api.toolIndex.sync(MODULE_ID, entries).catch((err: unknown) => {
+      console.error("[AI Log Manager] Could not sync the tool index", err);
+    });
   }
 }
