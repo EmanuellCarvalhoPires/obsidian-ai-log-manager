@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ai-log-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Creates and keeps conversation logs of AI agents in your vault, with project detection and development events.",
   "main": "main.js",
   "private": true,
@@ -12,7 +12,12 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["obsidian", "logs", "ai", "claude-code"],
+  "keywords": [
+    "obsidian",
+    "logs",
+    "ai",
+    "claude-code"
+  ],
   "author": "Emanuell Pires",
   "license": "MIT",
   "devDependencies": {
