@@ -5,7 +5,7 @@ import { CheckpointStore } from "./checkpoints";
 import type { DevState } from "./checkpoints";
 import { detectCommand, eventPath, findPullRequestUrl, renderEventNote, titleFromCommand } from "./dev-events";
 import type { DevEvent } from "./dev-events";
-import { LOG_FORMAT, layout, parseLog, toSvg } from "./graph";
+import { LOG_FORMAT, layout, parseLog, toSvg, toText } from "./graph";
 import type { Highlight, Row } from "./graph";
 import type { GitRunner, LogSettings, ProjectInfo, VaultPort } from "./ports";
 import { RemoteSync, parseRemoteUrl } from "./remote";
@@ -234,6 +234,25 @@ export class DevService {
     const commits = parseLog(await this.git(cwd, ["log", "--all", "--date-order", LOG_FORMAT, "-n", String(limit)]));
     const { rows, lanes } = layout(commits);
     return { svg: toSvg(rows, lanes, this.now(), options.width ?? 320, options.highlight ?? {}), rows, lanes };
+  }
+
+  /**
+   * Draws the repository graph and saves it as an SVG file in the events folder of the project
+   * (`Grafos/<project> - grafo.svg`, replaced on every call), so the SVG never travels in the answer.
+   */
+  async saveGraph(project: ProjectInfo, options: { limit?: number; highlight?: Highlight; width?: number } = {}): Promise<{ path: string; commits: number; lanes: number }> {
+    const g = await this.graph(project, options);
+    const folder = `${this.eventsFolder(project)}/Grafos`;
+    const path = `${folder}/${sanitizeFilename(`${project.name} - grafo`)}.svg`;
+    if (this.vault.exists(path)) await this.vault.process(path, () => g.svg);
+    else await this.vault.create(path, g.svg);
+    return { path, commits: g.rows.length, lanes: g.lanes };
+  }
+
+  /** The graph as one line per commit (`hash7 branch subject`), for a cheap look at the history. */
+  async graphText(project: ProjectInfo, options: { limit?: number } = {}): Promise<{ lines: string[]; commits: number; lanes: number }> {
+    const g = await this.graph(project, { limit: options.limit });
+    return { lines: toText(g.rows), commits: g.rows.length, lanes: g.lanes };
   }
 
   /** Changelog note of a release, from the git history between two refs (default: last tag to HEAD). */

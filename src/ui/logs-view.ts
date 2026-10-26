@@ -11,6 +11,7 @@ import type { ProjectTracker } from "../core/project-tracker";
 import { startTimer, stopTimer } from "../core/timers";
 import { t } from "../i18n";
 import { renderGraphInto } from "./graph-block";
+import { paginate, renderPaginationControls } from "./pagination";
 
 export const LOGS_VIEW_TYPE = "ai-log-manager-logs";
 const LIVE_WINDOW_MS = 3 * 60_000;
@@ -36,6 +37,7 @@ export class LogsView extends ItemView {
   private filters: LogFilters = {};
   private selected: string | undefined;
   private follow = true;
+  private page = 1;
   private refreshTimer: number | undefined;
   private renderTimer: number | undefined;
   private rendered: Component | undefined;
@@ -168,6 +170,7 @@ export class LogsView extends ItemView {
       const d = wrap.createEl("input", { type: "date" });
       d.addEventListener("change", () => {
         apply(d.value);
+        this.page = 1;
         this.renderList();
       });
     };
@@ -219,8 +222,9 @@ export class LogsView extends ItemView {
       this.listEl.createDiv({ text: t("view.empty"), cls: "ailm-empty ailm-muted" });
       return;
     }
+    const paginated = paginate(shown, this.page, 100);
     const now = Date.now();
-    for (const r of shown) {
+    for (const r of paginated.pageItems) {
       const row = this.listEl.createDiv({ cls: "ailm-row" });
       if (r.path === this.selected) row.addClass("is-active");
       row.setAttribute("role", "button");
@@ -247,6 +251,18 @@ export class LogsView extends ItemView {
         }
       });
     }
+
+    renderPaginationControls(
+      this.listEl,
+      paginated.hasMore,
+      paginated.shownCount,
+      paginated.total,
+      () => {
+        this.page++;
+        this.renderList();
+      },
+      { showMore: "Carregar mais" },
+    );
   }
 
   // ---- Preview --------------------------------------------------------------

@@ -9,7 +9,7 @@ type Args = Record<string, unknown>;
 
 export const DEV_INSTRUCTIONS =
   "Development events (commits, pushes, new branches, pull requests, deploys) of projects with a clone become notes by themselves: use dev_sync to look now, " +
-  "dev_record_event for an event the repository cannot show, dev_changelog for a release note and dev_graph for the repository graph (SVG).";
+  "dev_record_event for an event the repository cannot show, dev_changelog for a release note and dev_graph for the repository graph (saved as an SVG file in the vault; formato \"texto\" lists the commits).";
 
 export interface DevToolDeps {
   dev: DevService;
@@ -54,6 +54,11 @@ export function buildDevTools(deps: DevToolDeps): HubTool[] {
   return [
     {
       name: "dev_sync",
+      categoria: "dev",
+      tags: ["git", "dev", "sync", "commits"],
+      resumo: "Sincroniza commits, branches e PRs de um projeto no cofre",
+      efeito: "cofre",
+      exposicao: "indice",
       description:
         "Looks at the git repository of a project and records the commits, pushes and new branches that are not in the vault yet. " +
         "With remoto=true it also reads pull requests and deployments from GitHub or Bitbucket (needs the secret configured in the plugin).",
@@ -71,6 +76,11 @@ export function buildDevTools(deps: DevToolDeps): HubTool[] {
     },
     {
       name: "dev_record_event",
+      categoria: "dev",
+      tags: ["git", "dev", "evento"],
+      resumo: "Registra evento de desenvolvimento como nota do projeto",
+      efeito: "cofre",
+      exposicao: "indice",
       description:
         "Records a development event as a note in the events folder of the project (once per id). Commits, pushes and branches are recorded by themselves; use this for PRs and deploys that the repository cannot show.",
       inputSchema: {
@@ -116,6 +126,11 @@ export function buildDevTools(deps: DevToolDeps): HubTool[] {
     },
     {
       name: "dev_changelog",
+      categoria: "dev",
+      tags: ["git", "dev", "changelog", "release"],
+      resumo: "Gera nota de changelog de release a partir do git",
+      efeito: "cofre",
+      exposicao: "indice",
       description:
         "Creates the changelog note of a release from the git history between two refs (default: the last tag up to HEAD) in the Changelogs folder of the project.",
       inputSchema: {
@@ -136,23 +151,42 @@ export function buildDevTools(deps: DevToolDeps): HubTool[] {
     },
     {
       name: "dev_graph",
-      description: "Returns the repository graph of a project as an SVG document (newest commits of all branches), with an optional branch and commit highlighted.",
+      categoria: "dev",
+      tags: ["git", "dev", "grafo", "svg"],
+      resumo: "Gera grafo visual do histórico git do projeto (SVG ou texto)",
+      efeito: "cofre",
+      exposicao: "indice",
+      description:
+        "Draws the repository graph of a project (newest commits of all branches). By default it saves the SVG in the vault (events folder of the project) and returns only { path, commits, lanes }. " +
+        'formato="texto" returns one line per commit (hash, branch, subject); formato="svg" returns the whole SVG document in the answer (large).',
       inputSchema: {
         type: "object",
         properties: {
           ...PROJECT_PROP,
           limite: { type: "number", description: "Commits to draw (default from the settings)." },
-          branch: { type: "string" },
-          hash: { type: "string" },
+          branch: { type: "string", description: "Branch to highlight in the drawing." },
+          hash: { type: "string", description: "Commit to highlight in the drawing." },
+          formato: { type: "string", enum: ["arquivo", "svg", "texto"], description: 'arquivo (default): saves the SVG in the vault. svg: returns the SVG. texto: one line per commit.' },
         },
       },
-      annotations: { readOnlyHint: true, idempotentHint: true },
+      annotations: { idempotentHint: true },
       handler: guard(async (args) => {
         const found = await resolveProject(deps, args.projeto);
         if ("error" in found) return fail(found.error);
+        const format = text(args.formato) ?? "arquivo";
+        if (format !== "arquivo" && format !== "svg" && format !== "texto") return fail('"formato" must be arquivo, svg or texto.');
         const limit = typeof args.limite === "number" && args.limite > 0 ? Math.floor(args.limite) : undefined;
-        const g = await deps.dev.graph(found.project, { limit, highlight: { branch: text(args.branch), hash: text(args.hash) } });
-        return jsonResult({ project: found.project.name, commits: g.rows.length, lanes: g.lanes, svg: g.svg });
+        if (format === "texto") {
+          const g = await deps.dev.graphText(found.project, { limit });
+          return { content: [{ type: "text", text: [`${found.project.name}: ${g.commits} commits, ${g.lanes} lanes`, ...g.lines].join("\n") }] };
+        }
+        const options = { limit, highlight: { branch: text(args.branch), hash: text(args.hash) } };
+        if (format === "svg") {
+          const g = await deps.dev.graph(found.project, options);
+          return jsonResult({ project: found.project.name, commits: g.rows.length, lanes: g.lanes, svg: g.svg });
+        }
+        const saved = await deps.dev.saveGraph(found.project, options);
+        return jsonResult({ path: saved.path, commits: saved.commits, lanes: saved.lanes });
       }),
     },
   ];

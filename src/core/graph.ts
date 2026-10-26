@@ -129,6 +129,19 @@ export function layout(commits: Commit[]): { rows: Row[]; lanes: number } {
   return { rows, lanes: widest };
 }
 
+/**
+ * One line per commit, newest first: `hash7 branch subject`. The branch is the nearest ref
+ * label of the commit's lane (tags are ignored); commits with no label on their lane get "-".
+ */
+export function toText(rows: Row[]): string[] {
+  const laneBranch = new Map<number, string>();
+  return rows.map((row) => {
+    const own = row.refs.find((r) => r !== "HEAD" && !r.startsWith("tag: "));
+    if (own) laneBranch.set(row.lane, own);
+    return `${row.hash.slice(0, 7)} ${own ?? laneBranch.get(row.lane) ?? "-"} ${row.subject}`;
+  });
+}
+
 // ---------------------------------------------------------------- drawing
 
 const PALETTE = ["#d97757", "#6a9bcc", "#7fa86b", "#a98bd4", "#d4a24c", "#5fa8a0", "#c7799e", "#8f8a80"];
