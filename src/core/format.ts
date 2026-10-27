@@ -6,19 +6,23 @@ import { baseName, decodeUri, shortenAtWord } from "./text-utils";
 
 const QUOTE_LINE = /^>(\s|$)/;
 
+/** Cuts at the end of the first sentence: ".", "?" or "!" followed by a space or the end ("CLAUDE.md" stays whole). */
+function cutSentence(text: string): string {
+  return (text.split(/[.?!](?=\s|$)/)[0] ?? "").trim();
+}
+
 function firstSentence(text: string): string {
   const lines = text
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l !== "");
-  const first = lines[0] ?? "";
-  return (first.split(/[.?!]/)[0] ?? "").trim();
+  return cutSentence(lines[0] ?? "");
 }
 
 export function generateEntryTitle(turn: Pick<Turn, "userText" | "rawText" | "imagesCount" | "filesModified" | "assistantTexts">, sessionName = ""): string {
   const source = turn.rawText || turn.userText;
 
-  const obsidianLink = /obsidian:\/\/open\?[^\s]+file=([^&\s]+)/.exec(source);
+  const obsidianLink = /obsidian:\/\/open\?[^\s]+file=([^&\s"'<>)\]]+)/.exec(source);
   if (obsidianLink?.[1]) {
     const note = baseName(decodeUri(obsidianLink[1])).replace(/\.md$/, "");
     return `Link da nota [[${note}]]`;
@@ -49,7 +53,7 @@ export function generateEntryTitle(turn: Pick<Turn, "userText" | "rawText" | "im
     for (const rawLine of text.split("\n")) {
       const line = rawLine.replace(/^#+\s*/, "").trim().replace(/^Caminho [AB][^:]*:\s*/, "").trim();
       if (line.length >= 10 && !/^(http|```|\{|<)/.test(line)) {
-        const sent = (line.split(/[.?!]/)[0] ?? "").trim();
+        const sent = cutSentence(line);
         if (sent.length >= 10 && sent.length <= 50) return sent;
         if (sent.length > 50) {
           const short = shortenAtWord(sent, 50);
@@ -74,7 +78,7 @@ export function formatSolicitacao(turn: Pick<Turn, "userText" | "rawText" | "ima
 
   const urls = source.match(/https?:\/\/\S+/g) ?? [];
   const files = [...source.matchAll(/@"(.*?)"/g)].map((m) => m[1] ?? "");
-  const obsidianLinks = [...source.matchAll(/obsidian:\/\/open\?[^\s]+file=([^&\s]+)/g)].map((m) => m[1] ?? "");
+  const obsidianLinks = [...source.matchAll(/obsidian:\/\/open\?[^\s]+file=([^&\s"'<>)\]]+)/g)].map((m) => m[1] ?? "");
 
   if (turn.imagesCount > 0) parts.push("O usuário enviou print(s)/imagem(ns)");
   if (files.length > 0) parts.push(`anexou arquivo(s) (${files.map(baseName).join(", ")})`);
@@ -157,8 +161,17 @@ export interface Entry {
   markdown: string;
 }
 
+/** Makes a title safe as a heading and as the target of a [[#heading|alias]] link: no [[ ]], |, # or ^. */
+export function cleanHeadingTitle(title: string): string {
+  return title
+    .replace(/\[\[([^\]|]*)(?:\|[^\]]*)?\]\]/g, "$1")
+    .replace(/[[\]|#^]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function buildEntry(turn: Turn, sessionName = ""): Entry {
-  const title = generateEntryTitle(turn, sessionName);
+  const title = cleanHeadingTitle(generateEntryTitle(turn, sessionName)) || "Solicitação do usuário";
   const heading = `${turn.timestamp} - ${title}`;
   return {
     heading,

@@ -47,7 +47,6 @@ export class AILogManagerSettingTab extends PluginSettingTab {
     this.renderEcosystem(containerEl);
     this.renderEngine(containerEl);
     this.renderProjects(containerEl);
-    this.renderDev(containerEl);
     void this.renderHooks(containerEl);
   }
 
@@ -172,62 +171,6 @@ export class AILogManagerSettingTab extends PluginSettingTab {
           void this.host.saveSettings();
         }),
       );
-  }
-
-  private renderDev(el: HTMLElement): void {
-    new Setting(el).setHeading().setName(t("settings.dev.heading"));
-    const s = this.host.settings;
-    new Setting(el)
-      .setName(t("settings.dev.enabled"))
-      .setDesc(t("settings.dev.enabledDesc"))
-      .addToggle((tg) =>
-        tg.setValue(s.devEnabled).onChange((v) => {
-          s.devEnabled = v;
-          void this.host.saveSettings();
-        }),
-      );
-    new Setting(el)
-      .setName(t("settings.dev.folder"))
-      .setDesc(t("settings.dev.folderDesc"))
-      .addText((tx) =>
-        tx.setValue(s.eventsFolder).onChange((v) => {
-          s.eventsFolder = v.trim().replace(/^\/+|\/+$/g, "") || "Eventos";
-          void this.host.saveSettings();
-        }),
-      );
-    new Setting(el)
-      .setName(t("settings.dev.limit"))
-      .setDesc(t("settings.dev.limitDesc"))
-      .addText((tx) =>
-        tx.setValue(String(s.graphLimit)).onChange((v) => {
-          const n = Number(v);
-          if (Number.isFinite(n) && n >= 5 && n <= 300) {
-            s.graphLimit = Math.floor(n);
-            void this.host.saveSettings();
-          }
-        }),
-      );
-    new Setting(el)
-      .setName(t("settings.dev.remote"))
-      .setDesc(t("settings.dev.remoteDesc"))
-      .addToggle((tg) =>
-        tg.setValue(s.remoteEnabled).onChange((v) => {
-          s.remoteEnabled = v;
-          void this.host.saveSettings();
-        }),
-      );
-    new Setting(el).setName(t("settings.dev.githubSecret")).addText((tx) =>
-      tx.setValue(s.githubSecret).onChange((v) => {
-        s.githubSecret = v.trim();
-        void this.host.saveSettings();
-      }),
-    );
-    new Setting(el).setName(t("settings.dev.bitbucketSecret")).addText((tx) =>
-      tx.setValue(s.bitbucketSecret).onChange((v) => {
-        s.bitbucketSecret = v.trim();
-        void this.host.saveSettings();
-      }),
-    );
   }
 
   private async renderHooks(el: HTMLElement): Promise<void> {

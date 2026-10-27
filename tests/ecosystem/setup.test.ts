@@ -30,8 +30,8 @@ describe("setup handler", () => {
     expect(await h.handler.save!("registrar_eventos_dev", "nao")).toBeUndefined();
     expect(await h.handler.save!("ler_remoto", true)).toBeUndefined();
     expect(await h.handler.save!("pasta_dos_projetos", "Dev/Projetos/")).toBeUndefined();
-    expect(h.settings).toMatchObject({ mode: "observe", trackedFolders: ["C:/Dev"], devEnabled: false, remoteEnabled: true, projectsRoot: "Dev/Projetos" });
-    expect(h.saved()).toBe(5);
+    expect(h.settings).toMatchObject({ mode: "observe", trackedFolders: ["C:/Dev"], projectsRoot: "Dev/Projetos" });
+    expect(h.saved()).toBe(3);
   });
 
   it("installs the hooks only on a yes", async () => {
@@ -46,9 +46,16 @@ describe("setup handler", () => {
     const { handler, settings } = make();
     expect(await handler.save!("modo_dos_logs", "x")).toMatch(/active.*observe/);
     expect(await handler.save!("pasta_dos_projetos", "../fora")).toMatch(/vault-relative/);
-    expect(await handler.save!("ler_remoto", "talvez")).toMatch(/true or false/);
     expect(await handler.save!("outra", 1)).toContain(SETUP_KEYS[0]);
     expect(settings.mode).toBe("active");
+  });
+
+  it("accepts the keys of the old development events setup and ignores them", async () => {
+    const h = make();
+    expect(await h.handler.save!("registrar_eventos_dev", "sim")).toBeUndefined();
+    expect(await h.handler.save!("ler_remoto", "true")).toBeUndefined();
+    expect(h.saved()).toBe(0);
+    expect(SETUP_KEYS).not.toContain("registrar_eventos_dev");
   });
 
   it("validates", async () => {

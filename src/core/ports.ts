@@ -63,17 +63,6 @@ export interface LogSettings {
   projectLogsFolder: string;
   /** Absolute path of the Claude Code home (~/.claude); empty means the user home. */
   claudeHome: string;
-  /** Records development events (commit, push, branch, PR, deploy) of projects with a clone. */
-  devEnabled: boolean;
-  /** Subfolder of the project folder that receives the event notes. */
-  eventsFolder: string;
-  /** Commits drawn in a repository graph. */
-  graphLimit: number;
-  /** Reads pull requests and deployments from GitHub or Bitbucket (needs a secret in Environment Keys). */
-  remoteEnabled: boolean;
-  /** Names of the Environment Keys secrets (tokens). Only the names are stored here. */
-  githubSecret: string;
-  bitbucketSecret: string;
 }
 
 export const DEFAULT_LOG_SETTINGS: LogSettings = {
@@ -84,27 +73,4 @@ export const DEFAULT_LOG_SETTINGS: LogSettings = {
   projectsRoot: "Projetos",
   projectLogsFolder: "Logs",
   claudeHome: "",
-  devEnabled: true,
-  eventsFolder: "Eventos",
-  graphLimit: 60,
-  remoteEnabled: false,
-  githubSecret: "GITHUB_TOKEN",
-  bitbucketSecret: "BITBUCKET_TOKEN",
 };
-
-/** Runs `git <args>` in a folder and returns stdout. Rejects on a non-zero exit. */
-export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
-
-export interface HttpRequest {
-  method: "GET";
-  url: string;
-  headers: Record<string, string>;
-}
-
-export interface HttpResponse {
-  status: number;
-  body: string;
-}
-
-/** Authenticated HTTP through Environment Keys (placeholders are resolved there, never here). */
-export type SecureHttp = (req: HttpRequest) => Promise<HttpResponse>;

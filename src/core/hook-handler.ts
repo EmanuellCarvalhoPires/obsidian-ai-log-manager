@@ -4,7 +4,6 @@ import { CheckpointStore } from "./checkpoints";
 import { LogEngine } from "./engine";
 import { ProjectCreator } from "./project-creator";
 import { ProjectTracker, cwdKey } from "./project-tracker";
-import type { DevService } from "./dev-service";
 import { baseName } from "./text-utils";
 
 export interface HookEvent {
@@ -13,10 +12,6 @@ export interface HookEvent {
   cwd?: string;
   transcript_path?: string;
   prompt?: string;
-  comando?: string;
-  /** Output of the command (PostToolUse), cut by the hook. */
-  saida?: string;
-  tool?: string;
 }
 
 /** Asks the person whether a repository becomes a development project (decision D7). */
@@ -40,8 +35,6 @@ export class HookHandler {
     private readonly creator: ProjectCreator,
     private readonly prompter: ProjectPrompter,
     private readonly onProjectCreated?: (name: string) => void,
-    private readonly dev?: () => DevService | undefined,
-    private readonly devEnabled: () => boolean = () => true,
   ) {}
 
   /** Parses the body of the endpoint or a spool file; returns undefined when it is not an event. */
@@ -58,9 +51,6 @@ export class HookHandler {
       cwd: text(r.cwd),
       transcript_path: text(r.transcript_path),
       prompt: text(r.prompt),
-      comando: text(r.comando),
-      saida: text(r.saida),
-      tool: text(r.tool),
     };
   }
 
@@ -78,20 +68,9 @@ export class HookHandler {
         return this.linkByPrompt(event);
       case "SessionStart":
         return this.proposeProject(event);
-      case "PostToolUse":
-        return this.recordCommand(event);
       default:
         return { ok: true, action: "ignored" };
     }
-  }
-
-  private async recordCommand(event: HookEvent): Promise<HookResult> {
-    const dev = this.dev?.();
-    if (!dev || !this.devEnabled()) return { ok: true, action: "dev-off" };
-    const decision = await this.tracker.resolve(event.cwd);
-    if (!decision.track || !decision.project) return { ok: true, action: "no-project" };
-    const res = await dev.onCommand(decision.project, event.comando, event.saida);
-    return { ok: true, action: `dev:${res.action}`, detail: res.created.join(", ") || undefined };
   }
 
   private sync(event: HookEvent, flush: boolean): ReturnType<LogEngine["syncSession"]> {

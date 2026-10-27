@@ -2,20 +2,18 @@
 import * as os from "node:os";
 import * as nodeFs from "node:fs/promises";
 import { FileSystemAdapter, Notice, Plugin, setIcon } from "obsidian";
+import { createCheckpointStorage } from "./adapters/checkpoint-storage";
 import { createNodeDisk } from "./adapters/node-disk";
 import { collectLogSources } from "./adapters/log-sources";
-import { createNodeGit } from "./adapters/node-git";
 import { ObsidianVaultPort } from "./adapters/obsidian-vault";
 import { CheckpointStore } from "./core/checkpoints";
-import { DevService } from "./core/dev-service";
 import { LogEngine } from "./core/engine";
 import { HookHandler } from "./core/hook-handler";
 import { DEFAULT_LOG_SETTINGS } from "./core/ports";
-import type { LogSettings, SecureHttp } from "./core/ports";
+import type { LogSettings } from "./core/ports";
 import { ProjectCreator } from "./core/project-creator";
 import type { TemplateNoteCreator } from "./core/project-creator";
 import { ProjectTracker } from "./core/project-tracker";
-import { RemoteSync } from "./core/remote";
 import { SessionLocator } from "./core/session-locator";
 import { isTopLevelTranscript, watchFolder } from "./core/watcher";
 import type { FolderWatcher } from "./core/watcher";
@@ -29,28 +27,27 @@ import { hooksInstalled, mergeHooks } from "./hook/hook-installer";
 import type { ClaudeSettings } from "./hook/hook-installer";
 import { t } from "./i18n";
 import { stripBom } from "./core/text-utils";
-import { DEV_INSTRUCTIONS, buildDevTools } from "./tools/dev-tools";
 import { MODULE_ID, MODULE_INSTRUCTIONS, buildRoutes, buildTools } from "./tools/log-module";
 import { confirm } from "./ui/confirm-modal";
-import { registerGraphBlock } from "./ui/graph-block";
 import { LOGS_VIEW_TYPE, LogsView } from "./ui/logs-view";
 import { AILogManagerSettingTab } from "./ui/settings-tab";
 import type { SettingsHost } from "./ui/settings-tab";
 
+/** Settings keys of versions that recorded development events (now AI Git Tools); dropped when the settings load. */
+const LEGACY_SETTING_KEYS = ["devEnabled", "eventsFolder", "graphLimit", "remoteEnabled", "githubSecret", "bitbucketSecret"];
+
 function normalizeSettings(raw: unknown): LogSettings {
   const r = (typeof raw === "object" && raw !== null ? (raw as { settings?: Partial<LogSettings> }).settings : undefined) ?? {};
-  return {
+  const settings: LogSettings = {
     ...DEFAULT_LOG_SETTINGS,
     ...r,
     mode: r.mode === "observe" ? "observe" : "active",
     trackedFolders: Array.isArray(r.trackedFolders) ? r.trackedFolders.filter((f): f is string => typeof f === "string") : [],
   };
+  for (const key of LEGACY_SETTING_KEYS) delete (settings as unknown as Record<string, unknown>)[key];
+  return settings;
 }
 
-/** The part of the Environment Keys service used for remote reads. */
-interface SecretsRequestService {
-  request?(req: { method: "GET"; url: string; headers?: Record<string, string> }, callerModuleId: string): Promise<{ status: number; body: string }>;
-}
 
 export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   settings: LogSettings = { ...DEFAULT_LOG_SETTINGS };
@@ -60,8 +57,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   private tracker!: ProjectTracker;
   private locator!: SessionLocator;
   private hookHandler!: HookHandler;
-  private dev!: DevService;
-  private gitWatchers: FolderWatcher[] = [];
   private unregisterSetupHandler: (() => void) | undefined;
   private connector!: EcosystemConnector;
   private settingTab: AILogManagerSettingTab | undefined;
@@ -79,16 +74,12 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     this.locator = new SessionLocator(disk, () => this.claudeHome());
     this.tracker = new ProjectTracker(vault, disk, () => this.settings);
     this.store = await CheckpointStore.open(
-      {
-        load: async () => {
-          const path = `${this.pluginDir()}/checkpoints.json`;
-          return (await disk.exists(path)) ? (JSON.parse(await disk.readText(path)) as unknown) : undefined;
+      createCheckpointStorage(this.pluginDir(), {
+        onCorrupt: ({ reason, backup }) => {
+          console.error("[AI Log Manager] Could not read checkpoints.json", reason, backup);
+          new Notice(t("core.notice.checkpointsCorrupt", { backup: backup ?? "-" }), 15000);
         },
-        save: async (data) => {
-          await nodeFs.mkdir(this.pluginDir(), { recursive: true });
-          await nodeFs.writeFile(`${this.pluginDir()}/checkpoints.json`, JSON.stringify(data), "utf8");
-        },
-      },
+      }),
       () => Date.now(),
     );
     this.engine = new LogEngine({
@@ -100,14 +91,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       settings: () => this.settings,
       log: (message, detail) => console.debug("[AI Log Manager]", message, detail),
     });
-    const secureHttp: SecureHttp = async (req) => {
-      const secrets = this.connector?.getApi()?.getService<SecretsRequestService>("secrets");
-      if (!secrets?.request) throw new Error("Environment Keys is not available.");
-      const res = await secrets.request({ method: req.method, url: req.url, headers: req.headers }, MODULE_ID);
-      return { status: res.status, body: res.body };
-    };
-    const remote = new RemoteSync(secureHttp, () => ({ github: this.settings.githubSecret, bitbucket: this.settings.bitbucketSecret }));
-    this.dev = new DevService(createNodeGit(), vault, this.store, () => this.settings, () => (this.settings.remoteEnabled ? remote : undefined));
     const creator = new ProjectCreator(vault, () => this.settings, () => this.templates());
     this.hookHandler = new HookHandler(
       this.engine,
@@ -125,8 +108,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
           }),
       },
       (name) => new Notice(t("project.created", { name })),
-      () => this.dev,
-      () => this.settings.devEnabled,
     );
 
     this.setupStatusBar();
@@ -138,7 +119,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
           tracker: this.tracker,
           store: this.store,
           hooks: this.hookHandler,
-          dev: this.dev,
           settings: () => this.settings,
           runtime: () => ({ watching: this.transcriptWatcher !== undefined, hooksInstalled: this.hooksOk, connected: this.connector.isConnected() }),
         };
@@ -147,9 +127,9 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
           name: this.manifest.name,
           version: this.manifest.version,
           apiVersion: AI_ECOSYSTEM_API_VERSION,
-          tools: [...buildTools(deps), ...buildDevTools({ dev: this.dev, tracker: this.tracker })],
+          tools: buildTools(deps),
           routes: buildRoutes(deps),
-          instructions: `${MODULE_INSTRUCTIONS} ${DEV_INSTRUCTIONS}`,
+          instructions: MODULE_INSTRUCTIONS,
         };
       },
       onStatus: () => {
@@ -180,12 +160,10 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     });
     this.connector.start();
 
-    this.registerView(LOGS_VIEW_TYPE, (leaf) => new LogsView(leaf, { dev: () => this.dev, tracker: () => this.tracker }));
-    registerGraphBlock((lang, handler) => this.registerMarkdownCodeBlockProcessor(lang, handler), this.app, () => this.dev, () => this.tracker);
+    this.registerView(LOGS_VIEW_TYPE, (leaf) => new LogsView(leaf));
     this.addRibbonIcon("scroll-text", t("core.cmd.openView"), () => void this.openLogsView());
     this.addCommand({ id: "open-logs-view", name: t("core.cmd.openView"), callback: () => void this.openLogsView() });
     this.addCommand({ id: "reconcile-logs", name: t("core.cmd.syncAll"), callback: () => void this.reconcileNow() });
-    this.addCommand({ id: "sync-dev-events", name: t("core.cmd.syncDev"), callback: () => void this.syncDev(true) });
     this.addCommand({ id: "install-hooks", name: t("core.cmd.installHooks"), callback: () => void this.installHooks() });
 
     this.settingTab = new AILogManagerSettingTab(this.app, this, this);
@@ -197,7 +175,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   onunload(): void {
     this.transcriptWatcher?.stop();
     this.spoolWatcher?.stop();
-    for (const w of this.gitWatchers) w.stop();
     this.unregisterSetupHandler?.();
     this.connector?.stop();
     void this.store?.flush();
@@ -293,8 +270,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     if (results.some((r) => r.status === "created" || r.status === "updated")) {
       console.debug("[AI Log Manager] Reconciled on open", results.length);
     }
-    await this.syncDev(false);
-    await this.startGitWatchers();
     this.updateStatusBar();
   }
 
@@ -317,37 +292,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     });
   }
 
-  /** Records what is new in the repositories of the projects (also what happened while Obsidian was closed). */
-  async syncDev(manual: boolean): Promise<void> {
-    if (!this.settings.devEnabled) return;
-    this.tracker.invalidate();
-    let created = 0;
-    for (const project of await this.tracker.projects()) {
-      if (!project.clonePath) continue;
-      const res = await this.dev.sync(project, { remote: manual });
-      created += res.created.length;
-      for (const err of res.errors) console.debug("[AI Log Manager] dev sync", project.name, err);
-    }
-    if (manual) new Notice(t("core.notice.devDone", { created }));
-  }
-
-  /** Watches the reflogs of the project clones: a commit, a push or a new branch changes them. */
-  private async startGitWatchers(): Promise<void> {
-    for (const w of this.gitWatchers) w.stop();
-    this.gitWatchers = [];
-    if (!this.settings.devEnabled) return;
-    for (const project of await this.tracker.projects()) {
-      if (!project.clonePath) continue;
-      this.gitWatchers.push(
-        watchFolder(`${project.clonePath}/.git/logs`, {
-          recursive: true,
-          debounceMs: () => 3000,
-          onChange: () => void this.dev.sync(project),
-          onError: (err) => console.debug("[AI Log Manager] Git watcher", project.name, err),
-        }),
-      );
-    }
-  }
 
   private stopWatchers(): void {
     this.transcriptWatcher?.stop();
@@ -359,7 +303,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   private restartWatchers(): void {
     this.startWatchers();
     this.tracker.invalidate();
-    void this.startGitWatchers();
     this.updateStatusBar();
   }
 
@@ -471,11 +414,10 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       tracker: this.tracker,
       store: this.store,
       hooks: this.hookHandler,
-      dev: this.dev,
       settings: () => this.settings,
       runtime: () => ({ watching: this.transcriptWatcher !== undefined, hooksInstalled: this.hooksOk, connected: this.connector.isConnected() }),
     };
-    const tools = [...buildTools(deps), ...buildDevTools({ dev: this.dev, tracker: this.tracker })];
+    const tools = buildTools(deps);
     const entries = tools.map((t) => ({
       name: t.name,
       title: t.title,

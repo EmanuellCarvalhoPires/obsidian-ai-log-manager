@@ -11,11 +11,12 @@ export const SETUP_MODULE_ID = "ai-log-manager";
 export const SETUP_KEYS = [
   "modo_dos_logs",
   "pastas_acompanhadas",
-  "registrar_eventos_dev",
-  "ler_remoto",
   "instalar_hooks",
   "pasta_dos_projetos",
 ] as const;
+
+/** Keys of older guided setups that recorded development events (moved to AI Git Tools): accepted and ignored. */
+const IGNORED_SETUP_KEYS: readonly string[] = ["registrar_eventos_dev", "ler_remoto"];
 
 export interface SetupDeps {
   getSettings: () => LogSettings;
@@ -58,8 +59,6 @@ export function createSetupHandler(deps: SetupDeps): SetupHandler {
         trackedFolders: s.trackedFolders,
         projectsRoot: s.projectsRoot,
         projectsRootExists: deps.folderExists(s.projectsRoot),
-        devEnabled: s.devEnabled,
-        remoteEnabled: s.remoteEnabled,
         existingLogs: facts.existingLogs,
         projectsWithClone: facts.projectsWithClone,
         hooksInstalled: facts.hooksInstalled,
@@ -67,6 +66,7 @@ export function createSetupHandler(deps: SetupDeps): SetupHandler {
       };
     },
     save: async (key, value) => {
+      if (IGNORED_SETUP_KEYS.includes(key)) return undefined;
       const s = deps.getSettings();
       switch (key) {
         case "modo_dos_logs":
@@ -77,18 +77,6 @@ export function createSetupHandler(deps: SetupDeps): SetupHandler {
           if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) return "pastas_acompanhadas must be a list of absolute folder paths";
           s.trackedFolders = [...new Set((value as string[]).map((v) => v.trim()).filter((v) => v !== ""))];
           break;
-        case "registrar_eventos_dev": {
-          const b = toBoolean(value);
-          if (b === undefined) return "registrar_eventos_dev must be true or false";
-          s.devEnabled = b;
-          break;
-        }
-        case "ler_remoto": {
-          const b = toBoolean(value);
-          if (b === undefined) return "ler_remoto must be true or false";
-          s.remoteEnabled = b;
-          break;
-        }
         case "instalar_hooks": {
           const b = toBoolean(value);
           if (b === undefined) return "instalar_hooks must be true or false";

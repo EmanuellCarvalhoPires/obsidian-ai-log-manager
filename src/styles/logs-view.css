@@ -48,7 +48,7 @@
 
 .ailm-columns {
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(180px, 280px);
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -195,20 +195,6 @@
   padding: 16px 12px;
 }
 
-.ailm-graph-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 32px 16px;
-  text-align: center;
-}
-
-.ailm-graph-icon svg {
-  width: 28px;
-  height: 28px;
-}
-
 .ailm-small {
   font-size: var(--font-ui-smaller);
 }
@@ -217,25 +203,4 @@
   .ailm-columns {
     grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
   }
-
-  .ailm-col-graph {
-    display: none;
-  }
-}
-
-.ailm-graph-panel {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 8px;
-}
-
-.ailm-graph svg,
-.ailm-graph-block svg {
-  max-width: 100%;
-  height: auto;
-}
-
-.ailm-graph-block {
-  overflow-x: auto;
-  padding: 4px 0;
 }

@@ -44,6 +44,29 @@ describe("hook installer", () => {
     expect(removed.settings.hooks!.Stop).toHaveLength(1);
     expect(removed.settings.hooks!.SessionStart).toBeUndefined();
   });
+
+  it("installs only the four log events", () => {
+    expect(HOOK_EVENTS).toEqual(["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]);
+    expect(Object.keys(mergeHooks({}, SCRIPT).settings.hooks!)).not.toContain("PostToolUse");
+  });
+
+  it("removes this plugin's PostToolUse entry of older installs and keeps other tools' entries", () => {
+    const old: ClaudeSettings = {
+      hooks: {
+        PostToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: hookCommand(SCRIPT) }] },
+          { hooks: [{ type: "command", command: "python other.py" }] },
+        ],
+      },
+    };
+    const { settings, changed } = mergeHooks(old, SCRIPT);
+    expect(changed).toBe(true);
+    expect(settings.hooks!.PostToolUse).toHaveLength(1);
+    expect(settings.hooks!.PostToolUse![0]!.hooks![0]!.command).toBe("python other.py");
+    const gone = removeHooks(old, SCRIPT);
+    expect(gone.changed).toBe(true);
+    expect(gone.settings.hooks!.PostToolUse).toHaveLength(1);
+  });
 });
 
 describe("hook script", () => {
@@ -165,7 +188,7 @@ describe("HookHandler", () => {
   });
 });
 
-describe("hook script (PostToolUse)", () => {
+describe("hook script (events)", () => {
   function run(input: unknown): string[] {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ailm-"));
     try {
@@ -180,12 +203,14 @@ describe("hook script (PostToolUse)", () => {
     }
   }
 
-  it("drops only repository commands, with their output", () => {
-    const base = { hook_event_name: "PostToolUse", session_id: "s", cwd: "C:/x", tool_name: "Bash" };
-    expect(run({ ...base, tool_input: { command: "npm test" } })).toEqual([]);
-    expect(run({ ...base, tool_input: { command: "git status" } })).toEqual([]);
-    const [one] = run({ ...base, tool_input: { command: "gh pr create --fill" }, tool_response: { stdout: "https://github.com/o/r/pull/3" } });
-    const event = HookHandler.parse(JSON.parse(one!));
-    expect(event).toMatchObject({ evento: "PostToolUse", comando: "gh pr create --fill", saida: "https://github.com/o/r/pull/3" });
+  it("drops the four events of the plugin in the spool", () => {
+    for (const event of ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]) {
+      expect(run({ hook_event_name: event, session_id: "s", cwd: "C:/x" })).toHaveLength(1);
+    }
+  });
+
+  it("ignores events the plugin does not handle, such as the PostToolUse of an older install", () => {
+    const input = { hook_event_name: "PostToolUse", session_id: "s", cwd: "C:/x", tool_name: "Bash", tool_input: { command: "gh pr create --fill" } };
+    expect(run(input)).toEqual([]);
   });
 });

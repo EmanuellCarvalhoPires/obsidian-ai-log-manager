@@ -1,6 +1,5 @@
 // Reads a Claude Code transcript (.jsonl) and groups it into turns (request x response).
-// Port of parse_transcript() from scripts/gerar_log_conversa.py, kept behavior-compatible so the
-// plugin and the old script agree on what a log entry is during the migration.
+// Originally ported from scripts/gerar_log_conversa.py of the vault; this plugin is now the source of truth for the format.
 import { baseName } from "./text-utils";
 
 export interface Turn {
@@ -14,7 +13,6 @@ export interface Turn {
   filesModified: string[];
   commands: string[];
   assistantTexts: string[];
-  isLogRequest: boolean;
   /** The assistant finished answering (stop_reason end_turn) or a later turn exists. */
   complete: boolean;
 }
@@ -57,33 +55,13 @@ export function cleanUserText(raw: string): string {
   return text.replace(/\[Image:.*?\]/g, "").trim();
 }
 
-/** True when a user message only asks to create or update the log (those are never logged). */
-export function isLogCreationRequest(text: string): boolean {
-  if (!text) return false;
-  const t = text.toLowerCase().trim();
-  const isShort = t.length <= 160;
-  const filler = "(?:\\s+(?:o|a|os|as|um|uma|no|na|nos|nas|ao|novo|nova|esse|este|mais|l[aá]|a[ií]))*";
-  const verbs =
-    "(?:cri[ae]|criar|fa[çc][ae]|fazer|faz|ger[ae]|gerar|atualiz[ae]|atualizar|registr[ae]|registrar|salv[ae]|salvar|mont[ae]|montar|escrev[ae]|escrever)";
-  if (isShort && new RegExp(`(?:^|[^\\p{L}])${verbs}${filler}\\s+(?:log|logs|registro)(?![\\p{L}])`, "u").test(t)) return true;
-  if (
-    isShort &&
-    /(?:^|[^\p{L}])(?:log|logs|registro)\s+(?:d[aeo]st[ae]|d[aeo]ss[ae]|d[aeo]|no|na)\s+(?:conversa|chat|sess[aã]o|anota[çc][aã]o|cofre)(?![\p{L}])/u.test(t)
-  )
-    return true;
-  if (["gerar_log_conversa", "template de log", "script de log", "como usar o script de log"].some((k) => t.includes(k))) return true;
-  return [
-    "sim",
-    "pode criar",
-    "pode ser",
-    "cria",
-    "cria aí",
-    "atualiza",
-    "atualiza aí",
-    "pode atualizar",
-    "sim, cria",
-    "sim cria",
-  ].includes(t);
+/** "/name args" from the XML the app writes when the person runs a slash command; undefined when the text is not one. */
+export function extractSlashCommand(text: string): string | undefined {
+  const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(text)?.[1];
+  if (!name) return undefined;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim() ?? "";
+  const command = name.startsWith("/") ? name : `/${name}`;
+  return args ? `${command} ${args}` : command;
 }
 
 interface RawLine {
@@ -93,6 +71,8 @@ interface RawLine {
   sessionId?: string;
   isSidechain?: boolean;
   isMeta?: boolean;
+  isCompactSummary?: boolean;
+  isVisibleInTranscriptOnly?: boolean;
   customTitle?: string;
   message?: { content?: unknown; stop_reason?: string };
 }
@@ -102,6 +82,9 @@ function asContentItems(content: unknown): Array<Record<string, unknown>> {
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+/** Only these line types matter to the parser; the others (progress, attachments, snapshots) are skipped without a JSON.parse. */
+const MESSAGE_LINE = /"type"\s*:\s*"(?:user|assistant|custom-title)"/;
 
 export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedTranscript {
   const turns: Turn[] = [];
@@ -114,6 +97,7 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (trimmed === "") continue;
+    if (!MESSAGE_LINE.test(trimmed)) continue;
     let data: RawLine;
     try {
       data = JSON.parse(trimmed) as RawLine;
@@ -128,6 +112,8 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
     }
 
     if (data.type === "user") {
+      // The app writes the summary of a compaction as a user message; it is not something the person wrote.
+      if (data.isCompactSummary === true || data.isVisibleInTranscriptOnly === true) continue;
       const content = data.message?.content;
       let hasToolResult = false;
       const parts: string[] = [];
@@ -146,9 +132,14 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
       if (hasToolResult) continue;
       raw = stripSystemBlocks(raw);
       images += (raw.match(/\[Image:.*?\]/g) ?? []).length;
-      const cleaned = cleanUserText(raw);
-      if (cleaned.startsWith("<task-notification>") || cleaned.startsWith("<local-command") || cleaned === "[Request interrupted by user]") continue;
-      if (/^<command-name>[\s\S]*?<\/command-name>/.test(cleaned)) continue;
+      let cleaned = cleanUserText(raw);
+      if (cleaned.startsWith("<task-notification>") || cleaned.startsWith("<local-command") || cleaned.startsWith("[Request interrupted")) continue;
+      // A slash command the person ran: log "/name args" instead of the XML the app wrote.
+      const slash = extractSlashCommand(cleaned);
+      if (slash) {
+        cleaned = slash;
+        raw = slash;
+      }
       // Text the app injects when a skill loads: not something the person wrote.
       if (data.isMeta === true || cleaned.startsWith("Base directory for this skill:")) continue;
       if (!cleaned && images === 0 && !raw) continue;
@@ -162,7 +153,6 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
         if (raw) current.rawText = current.rawText ? `${current.rawText}\n${raw}` : raw;
         current.imagesCount += images;
       } else {
-        // Only the cleaned text is evaluated: raw may quote earlier answers and cause false positives.
         current = {
           timestamp: formatTimestamp(date, tzOffsetMinutes),
           date,
@@ -173,7 +163,6 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
           filesModified: [],
           commands: [],
           assistantTexts: [],
-          isLogRequest: isLogCreationRequest(cleaned || raw),
           complete: false,
         };
         turns.push(current);
@@ -210,6 +199,6 @@ export function parseTranscript(text: string, tzOffsetMinutes?: number): ParsedT
   turns.forEach((turn, i) => {
     if (i < turns.length - 1) turn.complete = true;
   });
-  const valid = turns.filter((t) => !t.isLogRequest && (t.userText || t.imagesCount > 0 || t.rawText));
+  const valid = turns.filter((t) => t.userText || t.imagesCount > 0 || t.rawText);
   return { turns: valid, firstTimestamp: first, cwd, sessionId, customTitle };
 }

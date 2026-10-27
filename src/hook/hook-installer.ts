@@ -1,11 +1,25 @@
 // Registers the hook script in the Claude Code settings (settings.json). Pure functions over the
 // parsed settings, so they are easy to test; the plugin does the reading and writing.
 
-export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PostToolUse"] as const;
+export const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"] as const;
 
-/** Events that only apply to some tools. */
-const MATCHERS: Partial<Record<(typeof HOOK_EVENTS)[number], string>> = { PostToolUse: "Bash" };
 const SCRIPT_MARK = "ai-log-manager-hook.mjs";
+
+/** Events an older version registered (repository commands); the next install removes this plugin's entry. */
+const LEGACY_EVENTS = ["PostToolUse"] as const;
+
+/** Removes the entries of this plugin (same command) from one event; returns whether something was removed. */
+function stripOwn(next: ClaudeSettings, event: string, command: string): boolean {
+  const current = next.hooks?.[event] ?? [];
+  const before = current.reduce((n, g) => n + (g.hooks?.length ?? 0), 0);
+  const groups = current
+    .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => h.command !== command) }))
+    .filter((g) => g.hooks.length > 0);
+  const after = groups.reduce((n, g) => n + g.hooks.length, 0);
+  if (groups.length > 0) next.hooks![event] = groups;
+  else delete next.hooks![event];
+  return after !== before;
+}
 
 interface HookCommand {
   type: string;
@@ -52,12 +66,12 @@ export function mergeHooks(settings: ClaudeSettings, scriptPath: string): { sett
     const groups = (next.hooks?.[event] ?? []).map((g) => ({ ...g, hooks: [...(g.hooks ?? [])] }));
     const present = groups.some((g) => g.hooks.some((h) => h.command === command));
     if (!present) {
-      const matcher = MATCHERS[event];
-      groups.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command, timeout: 10 }] });
+      groups.push({ hooks: [{ type: "command", command, timeout: 10 }] });
       changed = true;
     }
     next.hooks![event] = groups;
   }
+  for (const event of LEGACY_EVENTS) if (stripOwn(next, event, command)) changed = true;
   return { settings: next, changed };
 }
 
@@ -66,15 +80,6 @@ export function removeHooks(settings: ClaudeSettings, scriptPath: string): { set
   const command = hookCommand(scriptPath);
   const next: ClaudeSettings = { ...settings, hooks: { ...(settings.hooks ?? {}) } };
   let changed = false;
-  for (const event of HOOK_EVENTS) {
-    const groups = (next.hooks?.[event] ?? [])
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => h.command !== command) }))
-      .filter((g) => g.hooks.length > 0);
-    const before = (next.hooks?.[event] ?? []).reduce((n, g) => n + (g.hooks?.length ?? 0), 0);
-    const after = groups.reduce((n, g) => n + g.hooks.length, 0);
-    if (after !== before) changed = true;
-    if (groups.length > 0) next.hooks![event] = groups;
-    else delete next.hooks![event];
-  }
+  for (const event of [...HOOK_EVENTS, ...LEGACY_EVENTS]) if (stripOwn(next, event, command)) changed = true;
   return { settings: next, changed };
 }

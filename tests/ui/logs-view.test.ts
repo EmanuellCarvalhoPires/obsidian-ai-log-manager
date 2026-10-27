@@ -14,7 +14,7 @@ describe("LogsView", () => {
       },
       workspace: {},
     };
-    const view: any = new LogsView({ app } as never, { dev: () => ({}) as never, tracker: () => ({}) as never });
+    const view: any = new LogsView({ app } as never);
     view.registerEvent = () => undefined;
     await view.onOpen();
     expect(view.contentEl.children.length).toBeGreaterThan(1);

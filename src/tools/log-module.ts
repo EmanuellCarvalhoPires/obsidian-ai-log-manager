@@ -3,7 +3,7 @@
 import type { CheckpointStore } from "../core/checkpoints";
 import type { LogEngine, SyncResult } from "../core/engine";
 import { HookHandler } from "../core/hook-handler";
-import type { LogSettings } from "../core/ports";
+import type { LogSettings, ProjectInfo } from "../core/ports";
 import type { ProjectTracker } from "../core/project-tracker";
 import type { SessionLocator } from "../core/session-locator";
 import type { HubRoute, HubTool, HubToolResult } from "../ecosystem/types";
@@ -13,7 +13,7 @@ export const MODULE_ID = "ai-log-manager";
 export const MODULE_INSTRUCTIONS =
   "AI Log Manager keeps the conversation logs of this vault by itself: it watches the Claude Code transcripts, creates the log of a new conversation " +
   "and adds each new request and answer, without duplicates. You normally do not need to create or update a log. " +
-  "Use logs_status to see the state, logs_update to write the latest answer now, logs_create only to give a log its title, " +
+  "Use logs_status to see the state, logs_update to write the latest answer now, logs_set to choose the title, project and branches of a log (it also works before the log exists), " +
   "logs_link_project to attach a log to a development project and logs_rename to change its title. Never build a log note by hand.";
 
 type Args = Record<string, unknown>;
@@ -48,20 +48,38 @@ function describe(res: SyncResult): Record<string, unknown> {
   return { session: res.sessao, status: res.status, entries_added: res.added, note: res.notaLog, detail: res.detail };
 }
 
-async function resolveSession(deps: ToolDeps, explicit: unknown): Promise<string | undefined> {
+/** A conversation counts as active when its transcript changed in the last minutes. */
+export const ACTIVE_WINDOW_MS = 5 * 60_000;
+
+/**
+ * The MCP call does not say which conversation it comes from, so an explicit id always wins; without one the
+ * answer is the only active conversation, and more than one active conversation is an error (guessing would
+ * write another conversation's log).
+ */
+export async function resolveSession(
+  deps: Pick<ToolDeps, "locator" | "store">,
+  explicit: unknown,
+  now: () => number = Date.now,
+): Promise<{ session: string } | { error: string }> {
   const given = text(explicit);
-  if (given) return given;
-  // The MCP caller does not say which conversation it is: the most recently changed tracked one is it.
-  for (const ref of await deps.locator.listTranscripts()) {
-    if (deps.store.get(ref.sessionId)?.ignorada !== true) return ref.sessionId;
+  if (given) return { session: given };
+  const tracked = (await deps.locator.listTranscripts()).filter((r) => deps.store.get(r.sessionId)?.ignorada !== true);
+  if (tracked.length === 0) return { error: "No conversation found." };
+  const active = tracked.filter((r) => now() - r.mtimeMs <= ACTIVE_WINDOW_MS);
+  if (active.length > 1) {
+    const list = active
+      .slice(0, 5)
+      .map((r) => `${r.sessionId} (changed ${Math.round((now() - r.mtimeMs) / 1000)}s ago)`)
+      .join(", ");
+    return { error: `More than one conversation is active (${list}). Pass "sessao" with the id of this conversation.` };
   }
-  return undefined;
+  return { session: (active[0] ?? tracked[0]).sessionId };
 }
 
 const SESSION_PROP = {
   sessao: {
     type: "string",
-    description: "Claude Code session id. Leave empty to use the most recently changed conversation.",
+    description: "Claude Code session id. Leave empty only when a single conversation is active; with more than one it is required.",
   },
 };
 
@@ -83,18 +101,18 @@ export function buildTools(deps: ToolDeps): HubTool[] {
       efeito: "leitura",
       exposicao: "indice",
       description: "Shows the state of the log engine: mode, watcher, hooks and the latest conversations with their log notes.",
-      inputSchema: { type: "object", properties: { ...SESSION_PROP, limit: { type: "number", description: "How many conversations to list (default 10)." } } },
+      inputSchema: { type: "object", properties: { ...SESSION_PROP, limit: { type: "number", description: "How many conversations to list (default 3)." } } },
       annotations: { readOnlyHint: true, idempotentHint: true },
       availableDuringSetup: true,
       handler: guard(async (args) => {
         const settings = deps.settings();
-        const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 10;
+        const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 3;
         const only = text(args.sessao);
         const all = deps.store.all().filter((c) => !c.ignorada && (!only || c.sessao === only));
         const sessions = all
           .sort((a, b) => b.mtimeMs - a.mtimeMs)
           .slice(0, limit)
-          .map((c) => ({ session: c.sessao, note: c.notaLog, project: c.projeto, last_entry: c.hashUltimoRegistro, transcript: c.caminhoTranscript }));
+          .map((c) => ({ session: c.sessao, note: c.notaLog, project: c.projeto }));
         return jsonResult({
           mode: settings.mode,
           ...deps.runtime(),
@@ -106,21 +124,64 @@ export function buildTools(deps: ToolDeps): HubTool[] {
       }),
     },
     {
-      name: "logs_create",
+      name: "logs_set",
       categoria: "logs",
-      tags: ["logs", "conversa", "criar"],
-      resumo: "Cria nota de log de conversa com título customizado",
+      tags: ["logs", "conversa", "titulo", "projeto"],
+      resumo: "Define título, projeto e branches do log da conversa",
       efeito: "cofre",
       exposicao: "indice",
       description:
-        "Creates the log of a conversation if it does not exist yet, with the given title (3 to 8 words, Portuguese, no links, dates or / \\ : * ? \" < > |). " +
-        "The engine creates logs by itself, so use this only to choose the title. Does nothing if the log exists.",
-      inputSchema: { type: "object", properties: { ...SESSION_PROP, titulo: { type: "string", description: "Title of the log." }, projeto: { type: "string", description: "Development project note name, optional." } } },
+        "Sets the title, the development project and the branch notes of the log of a conversation. Works before the log exists (the values are kept and used when the log is created) and after (the log is renamed and linked). " +
+        "Title: 3 to 8 words, Portuguese, no links, dates or / \\ : * ? \" < > |. Pass at least one of titulo, projeto or branches.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...SESSION_PROP,
+          titulo: { type: "string", description: "Title of the log." },
+          projeto: { type: "string", description: "Development project note name (tag dev/projeto), optional." },
+          branches: { type: "array", items: { type: "string" }, description: "Branch note names to list in `branches` (needs projeto, or a conversation already linked to a project)." },
+        },
+      },
       handler: guard(async (args) => {
-        const session = await resolveSession(deps, args.sessao);
-        if (!session) return fail("No conversation found.");
-        const res = await deps.engine.syncSession(session, { force: true, title: text(args.titulo), project: text(args.projeto) });
-        return jsonResult(describe(res), res.status === "error" || res.status === "missing");
+        const titulo = text(args.titulo);
+        const branches = Array.isArray(args.branches)
+          ? args.branches.filter((b): b is string => typeof b === "string" && b.trim() !== "").map((b) => b.trim())
+          : [];
+        const projectArg = text(args.projeto);
+        if (!titulo && !projectArg && branches.length === 0) return fail('Pass at least one of "titulo", "projeto" or "branches".');
+        const found = await resolveSession(deps, args.sessao);
+        if ("error" in found) return fail(found.error);
+        const session = found.session;
+
+        const projectName = projectArg ?? (branches.length > 0 ? deps.store.get(session)?.projeto : undefined);
+        let project: ProjectInfo | undefined;
+        if (projectName) {
+          project = await deps.tracker.byName(projectName);
+          if (!project) {
+            const names = (await deps.tracker.projects()).map((p) => p.name);
+            return fail(`Project "${projectName}" was not found. Projects with the tag dev/projeto: ${names.join(", ") || "none"}.`);
+          }
+        }
+        if (branches.length > 0 && !project) return fail('"branches" needs "projeto" (or a conversation already linked to a project).');
+
+        // 1. Project and branches: remembered when the log does not exist yet, written to the frontmatter when it does.
+        if (project) await deps.engine.linkProject(session, project, branches);
+
+        // 2. Title: renames an existing log; before the log exists the engine keeps the title for the creation.
+        let note = deps.store.get(session)?.notaLog;
+        let status = project ? "linked" : "unchanged";
+        if (titulo) {
+          if (note) {
+            note = (await deps.engine.rename(session, titulo)).notaLog;
+            status = "renamed";
+          } else {
+            const res = await deps.engine.syncSession(session, { force: true, title: titulo, project: project?.name, branches });
+            if (res.status === "error" || res.status === "missing") return jsonResult(describe(res), true);
+            note = res.notaLog;
+            status = res.status === "created" ? "created" : "pending";
+          }
+        }
+        return jsonResult({ session, status, title: titulo, project: project?.name, branches, note, pending: note === undefined });
       }),
     },
     {
@@ -134,8 +195,9 @@ export function buildTools(deps: ToolDeps): HubTool[] {
       inputSchema: { type: "object", properties: { ...SESSION_PROP } },
       annotations: { idempotentHint: true },
       handler: guard(async (args) => {
-        const session = await resolveSession(deps, args.sessao);
-        if (!session) return fail("No conversation found.");
+        const found = await resolveSession(deps, args.sessao);
+        if ("error" in found) return fail(found.error);
+        const session = found.session;
         const res = await deps.engine.syncSession(session, { force: true });
         return jsonResult(describe(res), res.status === "error" || res.status === "missing");
       }),
@@ -188,8 +250,9 @@ export function buildTools(deps: ToolDeps): HubTool[] {
           const names = (await deps.tracker.projects()).map((p) => p.name);
           return fail(`Project "${name}" was not found. Projects with the tag dev/projeto: ${names.join(", ") || "none"}.`);
         }
-        const session = await resolveSession(deps, args.sessao);
-        if (!session) return fail("No conversation found.");
+        const found = await resolveSession(deps, args.sessao);
+        if ("error" in found) return fail(found.error);
+        const session = found.session;
         const branches = Array.isArray(args.branches) ? args.branches.filter((b): b is string => typeof b === "string") : [];
         const res = await deps.engine.linkProject(session, project, branches);
         return jsonResult({ session, project: project.name, linked: res.linked, note: res.notaLog, pending: !res.linked });
@@ -207,8 +270,9 @@ export function buildTools(deps: ToolDeps): HubTool[] {
       handler: guard(async (args) => {
         const title = text(args.titulo);
         if (!title) return fail('"titulo" is required.');
-        const session = await resolveSession(deps, args.sessao);
-        if (!session) return fail("No conversation found.");
+        const found = await resolveSession(deps, args.sessao);
+        if ("error" in found) return fail(found.error);
+        const session = found.session;
         const res = await deps.engine.rename(session, title);
         return jsonResult({ session, note: res.notaLog });
       }),
@@ -221,7 +285,7 @@ export function buildRoutes(deps: ToolDeps): HubRoute[] {
     {
       method: "POST",
       path: "/hook",
-      description: "Receives a Claude Code hook event: { evento, sessao, cwd?, prompt?, comando? }.",
+      description: "Receives a Claude Code hook event: { evento, sessao, cwd?, transcript_path?, prompt? }.",
       handler: async (req) => {
         const event = HookHandler.parse(req.body);
         if (!event) return { status: 400, body: { error: 'Expected { "evento": string, "sessao": string, ... }.' } };

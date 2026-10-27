@@ -1,6 +1,6 @@
 {
   "name": "obsidian-ai-log-manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Creates and keeps conversation logs of AI agents in your vault, with project detection and development events.",
   "main": "main.js",
   "private": true,

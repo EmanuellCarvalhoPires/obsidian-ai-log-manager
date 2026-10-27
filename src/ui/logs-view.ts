@@ -1,16 +1,12 @@
 // The logs screen: list of logs (Claude and Antigravity) with filters and search, a preview that
-// renders the note and follows the active conversation, and a side panel reserved for the
-// repository graph (Phase 3).
+// renders the note and follows the active conversation.
 import { Component, ItemView, MarkdownRenderer, Notice, TFile, setIcon } from "obsidian";
 import type { WorkspaceLeaf } from "obsidian";
 import { collectLogSources } from "../adapters/log-sources";
 import { buildIndex, distinct, filterLogs } from "../core/log-index";
 import type { LogFilters, LogRecord } from "../core/log-index";
-import type { DevService } from "../core/dev-service";
-import type { ProjectTracker } from "../core/project-tracker";
 import { startTimer, stopTimer } from "../core/timers";
 import { t } from "../i18n";
-import { renderGraphInto } from "./graph-block";
 import { paginate, renderPaginationControls } from "./pagination";
 
 export const LOGS_VIEW_TYPE = "ai-log-manager-logs";
@@ -27,11 +23,6 @@ function dayEnd(value: string): number | undefined {
   return start === undefined ? undefined : start + 24 * 3600_000 - 1;
 }
 
-export interface LogsViewDeps {
-  dev: () => DevService;
-  tracker: () => ProjectTracker;
-}
-
 export class LogsView extends ItemView {
   private records: LogRecord[] = [];
   private filters: LogFilters = {};
@@ -41,20 +32,15 @@ export class LogsView extends ItemView {
   private refreshTimer: number | undefined;
   private renderTimer: number | undefined;
   private rendered: Component | undefined;
-  private graphKey: string | undefined;
 
   private listEl!: HTMLElement;
   private countEl!: HTMLElement;
   private tocEl!: HTMLElement;
   private previewEl!: HTMLElement;
   private previewTitleEl!: HTMLElement;
-  private graphEl!: HTMLElement;
   private selects: Record<"agent" | "project" | "status", HTMLSelectElement> | undefined;
 
-  constructor(
-    leaf: WorkspaceLeaf,
-    private readonly deps: LogsViewDeps,
-  ) {
+  constructor(leaf: WorkspaceLeaf) {
     super(leaf);
   }
 
@@ -107,13 +93,6 @@ export class LogsView extends ItemView {
     open.addEventListener("click", () => void this.openSelected());
     this.tocEl = previewCol.createDiv({ cls: "ailm-toc" });
     this.previewEl = previewCol.createDiv({ cls: "ailm-preview markdown-rendered" });
-
-    const graphCol = columns.createDiv({ cls: "ailm-col ailm-col-graph" });
-    const graphHead = graphCol.createDiv({ cls: "ailm-preview-head" });
-    setIcon(graphHead.createSpan({ cls: "ailm-follow-icon" }), "git-branch");
-    graphHead.createDiv({ text: t("view.graph.title"), cls: "ailm-preview-title" });
-    this.graphEl = graphCol.createDiv({ cls: "ailm-graph-panel" });
-    this.graphEl.createDiv({ text: t("view.graph.pick"), cls: "ailm-empty ailm-muted" });
 
     this.registerEvent(this.app.metadataCache.on("changed", () => this.scheduleRefresh()));
     this.registerEvent(this.app.vault.on("create", () => this.scheduleRefresh()));
@@ -279,7 +258,6 @@ export class LogsView extends ItemView {
     const record = this.records.find((r) => r.path === this.selected);
     const file = this.selected ? this.app.vault.getFileByPath(this.selected) : null;
     this.tocEl.empty();
-    this.renderGraph(record);
     if (!record || !file) {
       this.previewTitleEl.setText("");
       this.previewEl.empty();
@@ -288,17 +266,6 @@ export class LogsView extends ItemView {
     }
     this.previewTitleEl.setText(record.title);
     void this.renderFile(file, record, fromChange);
-  }
-
-  private renderGraph(record: LogRecord | undefined): void {
-    if (this.graphKey === (record?.project ?? "")) return;
-    this.graphKey = record?.project ?? "";
-    this.graphEl.empty();
-    if (!record) {
-      this.graphEl.createDiv({ text: t("view.graph.pick"), cls: "ailm-empty ailm-muted" });
-      return;
-    }
-    void renderGraphInto(this.graphEl, this.deps.dev(), this.deps.tracker(), { projeto: record.project, width: 300 });
   }
 
   private async renderFile(file: TFile, record: LogRecord, fromChange: boolean): Promise<void> {

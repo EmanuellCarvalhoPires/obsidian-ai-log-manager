@@ -2,7 +2,7 @@
 
 - Plan: vault note `Projetos/AI Ecosystem/Plugin AI Log Manager/Plano de Implementação - AI Log Manager.md`. Do not use the `fluxo-de-desenvolvimento` skill here (GitHub, no Jira epic).
 - `src/core` has no Obsidian imports; it talks to the world through `src/core/ports.ts`. Keep it that way so tests stay in-memory.
-- Entry text is compatible with `scripts/gerar_log_conversa.py` of the vault (parity test). Change both or neither.
+- Entry text no longer has to match `scripts/gerar_log_conversa.py` of the vault (the parity test and the "log request" filter were removed); this plugin is the source of truth for the format.
 - UI: Lucide icons via `setIcon`, never emoji. Timers via `src/core/timers.ts` (window timers).
 - Test only in the test vault (`.deploy-target`). `git commit` and `git push` only when asked; merge is the user's.
 - No secret values in code, notes, logs or tests.

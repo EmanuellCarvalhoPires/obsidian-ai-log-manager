@@ -144,16 +144,13 @@ describe("LogEngine", () => {
     expect(note.match(/^## 21\/10\/2026 - 12:00/gm)).toHaveLength(1);
   });
 
-  it("never logs the request to create the log itself", async () => {
+  it("logs short confirmations like 'sim' as normal entries", async () => {
     const h = makeHarness();
-    h.disk.put(
-      h.transcript,
-      userLine("Quero uma tela de logs", T1) + assistantLine("Feito.", T2) + userLine("cria o log desta conversa", T3) + assistantLine("Log criado.", T4),
-    );
+    h.disk.put(h.transcript, userLine("Quero uma tela de logs", T1) + assistantLine("Posso criar?", T2) + userLine("sim", T3) + assistantLine("Criada.", T4));
     const res = await h.engine.syncTranscript(h.transcript, { tzOffsetMinutes: TZ });
     const note = h.vault.notes.get(res.notaLog!)!;
-    expect(note.match(/^## \d{2}\//gm)).toHaveLength(1);
-    expect(note).not.toContain("cria o log");
+    expect(note.match(/^## \d{2}\//gm)).toHaveLength(2);
+    expect(note).toContain("**Solicitação:** sim");
   });
 
   it("ignores conversations outside the tracked folders", async () => {
@@ -232,5 +229,33 @@ describe("LogEngine", () => {
     expect(renamed.notaLog).toBe("Knowledge/Logs/21-10-2026 - 12h00 - Plugin de logs - motor.md");
     expect(h.vault.notes.has(created.notaLog!)).toBe(false);
     expect(h.vault.notes.get(renamed.notaLog)).toContain("# Plugin de logs - motor");
+  });
+
+  it("keeps the title chosen before the log exists and uses it when the log is created", async () => {
+    const h = makeHarness();
+    h.disk.put(h.transcript, userLine("Faz algo longo", T1) + toolUseLine("Bash", { command: "npm test" }, T2), 1000);
+    const pending = await h.engine.syncTranscript(h.transcript, { force: true, title: "Título escolhido", tzOffsetMinutes: TZ });
+    expect(pending.status).toBe("pending");
+    expect(h.vault.notes.size).toBe(0);
+    h.disk.append(h.transcript, assistantLine("Terminei.", T3), 2000);
+    const created = await h.engine.syncTranscript(h.transcript, { tzOffsetMinutes: TZ });
+    expect(created.status).toBe("created");
+    expect(created.notaLog).toBe("Knowledge/Logs/21-10-2026 - 12h00 - Título escolhido.md");
+    expect(h.vault.notes.get(created.notaLog!)).toContain("# Título escolhido");
+    expect(h.store.get("sess-1")?.tituloPendente).toBeUndefined();
+  });
+
+  it("keeps the branches chosen before the log exists and writes them when the log is created", async () => {
+    const h = makeHarness();
+    h.vault.projectList = [{ name: "Meu App", folder: "Projetos/Meu App", clonePath: undefined }];
+    await h.engine.linkProject("sess-1", h.vault.projectList[0]!, ["Meu App - feature-x"], h.transcript);
+    h.disk.put(h.transcript, firstTurns());
+    const created = await h.engine.syncTranscript(h.transcript, { tzOffsetMinutes: TZ });
+    expect(created.status).toBe("created");
+    const note = h.vault.notes.get(created.notaLog!)!;
+    expect(note).toContain("branches:");
+    expect(note).toContain('  - "[[Meu App - feature-x]]"');
+    expect(note).toContain('projeto: "[[Meu App]]"');
+    expect(h.store.get("sess-1")?.branchesPendentes).toBeUndefined();
   });
 });

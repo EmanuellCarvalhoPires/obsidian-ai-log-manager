@@ -30,6 +30,8 @@ export interface SyncOptions {
   title?: string;
   /** Project to link when the log is created. */
   project?: string;
+  /** Branch note names to write in the frontmatter when the log is created. */
+  branches?: string[];
   tzOffsetMinutes?: number;
 }
 
@@ -115,9 +117,12 @@ export class LogEngine {
     return this.serialize(sessionId, async () => {
       const cp = this.deps.store.get(sessionId);
       const logsIndex = `${project.name} - Logs`;
-      if (cp) this.deps.store.set({ ...cp, projeto: project.name });
+      const note = cp?.notaLog && this.deps.vault.exists(cp.notaLog) ? cp.notaLog : undefined;
+      // No log yet: remember the project and the branches so the log is created with them.
+      const pending = note ? undefined : [...new Set([...(cp?.branchesPendentes ?? []), ...branches])];
+      const withPending = pending && pending.length > 0 ? { branchesPendentes: pending } : {};
+      if (cp) this.deps.store.set({ ...cp, projeto: project.name, ...withPending });
       else {
-        // No log yet: remember the project so the log is created in its Logs folder.
         this.deps.store.set({
           sessao: sessionId,
           hostSessionId: "",
@@ -127,9 +132,9 @@ export class LogEngine {
           hashUltimoRegistro: "",
           notaLog: undefined,
           projeto: project.name,
+          ...withPending,
         });
       }
-      const note = cp?.notaLog && this.deps.vault.exists(cp.notaLog) ? cp.notaLog : undefined;
       if (!note) return { linked: false };
       await this.deps.vault.updateFrontmatter(note, (fm) => {
         const ups = ([] as unknown[]).concat(fm.up ?? []).map((u) => String(u));
@@ -197,7 +202,20 @@ export class LogEngine {
       const project = projectName ? await tracker.byName(projectName) : undefined;
 
       if (turns.length === 0) {
-        store.set(this.checkpoint(sessionId, known, path, stat, { hostSessionId: host, notaLog: notePath, projeto: projectName }));
+        store.set(
+          this.checkpoint(sessionId, known, path, stat, {
+            hostSessionId: host,
+            notaLog: notePath,
+            projeto: projectName,
+            // No log yet: remember what logs_set chose so the log is created with it.
+            ...(notePath
+              ? {}
+              : {
+                  tituloPendente: options.title?.trim() || known?.tituloPendente,
+                  branchesPendentes: options.branches && options.branches.length > 0 ? options.branches : known?.branchesPendentes,
+                }),
+          }),
+        );
         return { sessao: sessionId, status: "pending", added: 0, notaLog: notePath };
       }
       const lastHeading = (): string => buildEntry(turns[turns.length - 1], sessionName).heading;
@@ -228,7 +246,9 @@ export class LogEngine {
       }
 
       // The log does not exist yet.
-      const title = normalizeSessionName(options.title?.trim() || sessionName || generateEntryTitle(turns[0], parsed.customTitle ?? ""));
+      const chosenTitle = options.title?.trim() || known?.tituloPendente;
+      const title = normalizeSessionName(chosenTitle || sessionName || generateEntryTitle(turns[0], parsed.customTitle ?? ""));
+      const branches = options.branches && options.branches.length > 0 ? options.branches : (known?.branchesPendentes ?? []);
       const folder = project ? `${project.folder}/${settings.projectLogsFolder}` : vault.memoryFolder();
       const first = parsed.firstTimestamp ?? turns[0].date;
       const target = `${folder}/${fileStamp(first, options.tzOffsetMinutes)} - ${sanitizeFilename(title)}.md`;
@@ -238,7 +258,7 @@ export class LogEngine {
       }
       const up = project ? ["Memória Claude", `${project.name} - Logs`] : ["Memória Claude"];
       const content = buildNoteContent(
-        { agent: this.agent, hostSessionId: host, title, up, project: project?.name },
+        { agent: this.agent, hostSessionId: host, title, up, project: project?.name, branches },
         turns.map((t) => buildEntry(t, title)),
       );
       await vault.create(target, content);
@@ -248,6 +268,8 @@ export class LogEngine {
           notaLog: target,
           projeto: project?.name,
           hashUltimoRegistro: lastHeading(),
+          tituloPendente: undefined,
+          branchesPendentes: undefined,
         }),
       );
       return { sessao: sessionId, status: "created", added: turns.length, notaLog: target };
@@ -276,6 +298,8 @@ export class LogEngine {
       hashUltimoRegistro: known?.hashUltimoRegistro ?? "",
       notaLog: known?.notaLog,
       projeto: known?.projeto,
+      tituloPendente: known?.tituloPendente,
+      branchesPendentes: known?.branchesPendentes,
       ...patch,
     };
   }
