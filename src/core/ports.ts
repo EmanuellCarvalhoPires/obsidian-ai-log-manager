@@ -40,6 +40,8 @@ export interface VaultPort {
   memoryFolder(): string;
   /** Notes with the tag dev/projeto. */
   projects(): Promise<ProjectInfo[]>;
+  /** Content of a note found by its name (no folder, no extension), or undefined when there is none. */
+  readNoteByName(name: string): Promise<string | undefined>;
   /** Changes the frontmatter of a note. */
   updateFrontmatter(path: string, fn: (frontmatter: Record<string, unknown>) => void): Promise<void>;
   /** Renames a note (keeps links). */

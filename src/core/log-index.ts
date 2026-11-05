@@ -31,6 +31,9 @@ export interface LogSource {
 
 const AGENT_TAGS = ["claude", "gemini"];
 
+/** Section headings of a log that are not conversation entries. */
+const NON_ENTRY_HEADINGS = ["sumário", "decisões e fatos da sessão"];
+
 const text = (v: unknown): string | undefined => {
   if (Array.isArray(v)) return text(v[0]);
   return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
@@ -74,7 +77,7 @@ export function toRecord(src: LogSource): LogRecord | undefined {
     status: statusTag ?? statusProp ?? "ativo",
     date: dateFromLastEntry(src.headings) ?? dateFromName(src.basename) ?? src.ctime,
     sessao: text(src.frontmatter.sessao),
-    entries: src.headings.filter((h) => h.toLowerCase() !== "sumário"),
+    entries: src.headings.filter((h) => !NON_ENTRY_HEADINGS.includes(h.toLowerCase())),
     mtime: src.mtime,
   };
 }

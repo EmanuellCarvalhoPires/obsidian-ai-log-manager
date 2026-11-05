@@ -73,6 +73,10 @@ export class MemoryVault implements VaultPort {
   async projects(): Promise<ProjectInfo[]> {
     return this.projectList;
   }
+  async readNoteByName(name: string): Promise<string | undefined> {
+    for (const [path, content] of this.notes) if (path.replace(/^.*\//, "").replace(/\.md$/, "") === name) return content;
+    return undefined;
+  }
   async updateFrontmatter(path: string, fn: (fm: Record<string, unknown>) => void): Promise<void> {
     const fm: Record<string, unknown> = {};
     const content = await this.read(path);

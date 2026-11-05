@@ -60,6 +60,11 @@ export class ObsidianVaultPort implements VaultPort {
     return out;
   }
 
+  async readNoteByName(name: string): Promise<string | undefined> {
+    const file = this.app.vault.getMarkdownFiles().find((f) => f.basename === name);
+    return file ? this.app.vault.cachedRead(file) : undefined;
+  }
+
   async updateFrontmatter(path: string, fn: (frontmatter: Record<string, unknown>) => void): Promise<void> {
     await this.app.fileManager.processFrontMatter(this.file(path), (fm: Record<string, unknown>) => fn(fm));
   }

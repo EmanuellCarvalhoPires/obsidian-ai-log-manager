@@ -3,12 +3,18 @@
 import { CheckpointStore } from "./checkpoints";
 import type { Checkpoint } from "./checkpoints";
 import { buildEntry, generateEntryTitle, normalizeSessionName } from "./format";
-import { appendEntries, buildNoteContent } from "./log-note";
+import { appendEntries, appendFacts, buildNoteContent, extractEntitiesFromTurns, parseTicketPrefixes } from "./log-note";
+import type { Entities } from "./log-note";
 import type { DiskPort, LogSettings, ProjectInfo, VaultPort } from "./ports";
 import { ProjectTracker } from "./project-tracker";
 import { SessionLocator } from "./session-locator";
 import { sanitizeFilename } from "./text-utils";
 import { parseTranscript } from "./transcript";
+import type { Turn } from "./transcript";
+
+/** Note of the vault that lists the real Jira project prefixes (used to validate cited tickets). */
+export const TICKET_PREFIXES_NOTE = "Prefixos de Projetos Jira";
+const PREFIXES_TTL_MS = 60_000;
 
 export type SyncStatus = "created" | "updated" | "unchanged" | "ignored" | "pending" | "observed" | "missing" | "error";
 
@@ -44,6 +50,8 @@ export interface EngineDeps {
   settings: () => LogSettings;
   agent?: string;
   log?: (message: string, detail?: unknown) => void;
+  /** Clock in epoch ms (facts get a timestamp); defaults to Date.now. */
+  now?: () => number;
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -60,6 +68,7 @@ function fileStamp(date: Date, tz?: number): string {
 export class LogEngine {
   private readonly queues = new Map<string, Promise<unknown>>();
   private readonly agent: string;
+  private prefixCache: { at: number; prefixes: Set<string> | undefined } | undefined;
 
   constructor(private readonly deps: EngineDeps) {
     this.agent = deps.agent ?? "claude";
@@ -105,6 +114,52 @@ export class LogEngine {
     }
     this.deps.store.markReconciled();
     return results;
+  }
+
+  /**
+   * Writes facts in the "Decisões e Fatos da Sessão" section of the log (created between the Sumário and the `---`).
+   * Runs in the queue of the conversation, so it never races with the watcher.
+   */
+  async addFacts(sessionId: string, facts: string[]): Promise<{ updated: boolean; notaLog?: string; added: number }> {
+    return this.serialize(sessionId, async () => {
+      const note = this.deps.store.get(sessionId)?.notaLog;
+      if (!note || !this.deps.vault.exists(note)) throw new Error("This conversation has no log yet. Use logs_update first.");
+      const stamp = this.factStamp();
+      let added = 0;
+      await this.deps.vault.process(note, (content) => {
+        const result = appendFacts(content, facts, stamp);
+        added = result.added;
+        return result.content;
+      });
+      return { updated: added > 0, notaLog: note, added };
+    });
+  }
+
+  /** dd/MM/yyyy HH:mm in the local time zone. */
+  private factStamp(): string {
+    const d = new Date((this.deps.now ?? Date.now)());
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  /** Real Jira prefixes from the vault note (cached); undefined when the note is missing, so the regex fallback applies. */
+  private async ticketPrefixes(): Promise<Set<string> | undefined> {
+    const now = (this.deps.now ?? Date.now)();
+    if (this.prefixCache && now - this.prefixCache.at < PREFIXES_TTL_MS) return this.prefixCache.prefixes;
+    let prefixes: Set<string> | undefined;
+    try {
+      const text = await this.deps.vault.readNoteByName(TICKET_PREFIXES_NOTE);
+      const parsed = text ? parseTicketPrefixes(text) : undefined;
+      prefixes = parsed && parsed.size > 0 ? parsed : undefined;
+    } catch {
+      prefixes = undefined;
+    }
+    this.prefixCache = { at: now, prefixes };
+    return prefixes;
+  }
+
+  private async entitiesOf(turns: Turn[]): Promise<Entities> {
+    const names = (await this.deps.tracker.projects()).map((p) => p.name);
+    return extractEntitiesFromTurns(turns, names, await this.ticketPrefixes());
   }
 
   /** Links the log of a conversation to a development project (or remembers it for when the log is created). */
@@ -234,6 +289,7 @@ export class LogEngine {
           added = result.added;
           return result.content;
         });
+        if (added > 0) await this.mergeEntities(existing, await this.entitiesOf(turns));
         store.set(
           this.checkpoint(sessionId, known, path, stat, {
             hostSessionId: host,
@@ -257,8 +313,19 @@ export class LogEngine {
         return { sessao: sessionId, status: "observed", added: turns.length, detail: `would create ${target}` };
       }
       const up = project ? ["Memória Claude", `${project.name} - Logs`] : ["Memória Claude"];
+      const entities = await this.entitiesOf(turns);
       const content = buildNoteContent(
-        { agent: this.agent, hostSessionId: host, title, up, project: project?.name, branches },
+        {
+          agent: this.agent,
+          hostSessionId: host,
+          title,
+          up,
+          project: project?.name,
+          branches,
+          tickets: entities.tickets,
+          prs: entities.prs,
+          projects: entities.projects,
+        },
         turns.map((t) => buildEntry(t, title)),
       );
       await vault.create(target, content);
@@ -278,6 +345,26 @@ export class LogEngine {
       this.deps.log?.("sync failed", { sessionId, detail });
       return { sessao: sessionId, status: "error", added: 0, detail };
     }
+  }
+
+  /** Adds the cited entities to the frontmatter without duplicates (the body stays append-only). */
+  private async mergeEntities(note: string, entities: Entities): Promise<void> {
+    if (entities.tickets.length === 0 && entities.prs.length === 0 && entities.projects.length === 0) return;
+    const merge = (fm: Record<string, unknown>, key: string, wanted: string[]): void => {
+      if (wanted.length === 0) return;
+      const current = ([] as unknown[]).concat(fm[key] ?? []).map((v) => String(v));
+      const fresh = wanted.filter((w) => !current.includes(w));
+      if (fresh.length > 0) fm[key] = [...current, ...fresh];
+    };
+    await this.deps.vault.updateFrontmatter(note, (fm) => {
+      merge(fm, "tickets_citados", entities.tickets);
+      merge(fm, "prs_citados", entities.prs);
+      merge(
+        fm,
+        "projetos_citados",
+        entities.projects.map((p) => `[[${p}]]`),
+      );
+    });
   }
 
   private checkpoint(

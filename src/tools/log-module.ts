@@ -14,7 +14,7 @@ export const MODULE_INSTRUCTIONS =
   "AI Log Manager keeps the conversation logs of this vault by itself: it watches the Claude Code transcripts, creates the log of a new conversation " +
   "and adds each new request and answer, without duplicates. You normally do not need to create or update a log. " +
   "Use logs_status to see the state, logs_update to write the latest answer now, logs_set to choose the title, project and branches of a log (it also works before the log exists), " +
-  "logs_link_project to attach a log to a development project and logs_rename to change its title. Never build a log note by hand.";
+  "logs_link_project to attach a log to a development project, logs_rename to change its title and logs_add_fact to record a decision or fact of the conversation. Never build a log note by hand.";
 
 type Args = Record<string, unknown>;
 
@@ -200,6 +200,38 @@ export function buildTools(deps: ToolDeps): HubTool[] {
         const session = found.session;
         const res = await deps.engine.syncSession(session, { force: true });
         return jsonResult(describe(res), res.status === "error" || res.status === "missing");
+      }),
+    },
+    {
+      name: "logs_add_fact",
+      categoria: "logs",
+      tags: ["logs", "conversa", "fatos", "decisao"],
+      resumo: "Registra decisões e fatos da sessão no log da conversa",
+      efeito: "cofre",
+      exposicao: "indice",
+      description:
+        "Adds one or more facts or decisions to the section 'Decisões e Fatos da Sessão' of the log of a conversation, each with a date and time stamp. " +
+        "The section is created below the Sumário when it does not exist; repeated facts are skipped. The log must already exist.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...SESSION_PROP,
+          fatos: {
+            anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+            description: "A fact or a list of facts, e.g. 'Definido uso de RRF no motor de busca'.",
+          },
+        },
+        required: ["fatos"],
+      },
+      handler: guard(async (args) => {
+        const raw = Array.isArray(args.fatos) ? args.fatos : [args.fatos];
+        const facts = raw.filter((f): f is string => typeof f === "string" && f.trim() !== "").map((f) => f.trim());
+        if (facts.length === 0) return fail('"fatos" is required (a string or a list of strings).');
+        const found = await resolveSession(deps, args.sessao);
+        if ("error" in found) return fail(found.error);
+        const session = found.session;
+        const res = await deps.engine.addFacts(session, facts);
+        return jsonResult({ session, updated: res.updated, facts_added: res.added, note: res.notaLog });
       }),
     },
     {
