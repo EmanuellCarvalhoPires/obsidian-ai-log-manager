@@ -145,7 +145,10 @@ export class AILogManagerSettingTab extends PluginSettingTab {
           .setIcon("refresh-cw")
           .onClick(() => {
             btn.setDisabled(true);
-            void this.host.reconcileNow().finally(() => btn.setDisabled(false));
+            // Block body on purpose: returning the button (a thenable) would make the Promise loop forever.
+            void this.host.reconcileNow().finally(() => {
+              btn.setDisabled(false);
+            });
           }),
       );
   }
@@ -188,7 +191,9 @@ export class AILogManagerSettingTab extends PluginSettingTab {
             void this.host
               .installHooks()
               .then(() => this.display())
-              .finally(() => btn.setDisabled(false));
+              .finally(() => {
+                btn.setDisabled(false);
+              });
           }),
       );
   }

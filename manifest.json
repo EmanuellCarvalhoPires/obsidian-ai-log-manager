@@ -1,7 +1,7 @@
 {
   "id": "ai-log-manager",
   "name": "AI Log Manager",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minAppVersion": "1.13.0",
   "description": "Creates and keeps conversation logs of AI agents in your vault, with project detection.",
   "author": "Emanuell Pires",
