@@ -43,6 +43,8 @@ const context = await esbuild.context({
     "@lezer/lr",
     ...builtinModules,
     ...builtinModules.map((m) => `node:${m}`),
+    // Only listed (with the prefix) by recent Node versions; the Gemini reader loads it on first use.
+    "node:sqlite",
   ],
   format: "cjs",
   target: "es2022",

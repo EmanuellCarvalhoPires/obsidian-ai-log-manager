@@ -7,6 +7,7 @@ Phases 1 (log engine) and 2 (logs screen) of the vault note "Plano de Implementa
 ## What it does
 
 - Watches the Claude Code transcripts (`~/.claude/projects/**/*.jsonl`), creates the log of a new conversation and appends each new request and answer, without duplicates and without changing what is already written.
+- Does the same for the Gemini (Antigravity) conversations, read from the SQLite file Antigravity writes for each one (`~/.gemini/<app>/conversations/<id>.db`, steps in protobuf) with Node's built-in `node:sqlite`, read-only. Without `node:sqlite` only these logs are skipped.
 - Reconciles when Obsidian opens: completes the logs with what happened while it was closed.
 - Optional Claude Code hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) are an extra "update now" trigger. The hook only drops a small file in `spool/`; this plugin reads it, also after Obsidian was closed.
 - Links a conversation to a development project (note tagged `dev/projeto`) when the prompt cites it, and proposes a new project (after your confirmation) when a conversation starts in a git repository without a project note.

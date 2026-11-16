@@ -16,6 +16,18 @@ export interface LogRecord {
   /** Headings of the entries, in order (the Sumário). */
   entries: string[];
   mtime: number;
+  /** Absolute path of the transcript, from the `jsonl_caminho` property (empty for logs made before it existed). */
+  transcript: string | undefined;
+  /** The log of a subagent of a conversation (tag `subagente`). */
+  subagent: boolean;
+  /** File name (no extension) of the note. */
+  name: string;
+  /** Name of the log of the conversation that called the subagent (first `up` link), for subagent logs. */
+  parent: string | undefined;
+  /** The log of a fork of another conversation (tag `fork`, KAN-10). */
+  fork?: boolean;
+  /** Session id of the conversation this one was forked from (`sessao_pai` property), for fork logs. */
+  forkOf?: string;
 }
 
 /** What the adapter extracts from a note. */
@@ -29,7 +41,8 @@ export interface LogSource {
   mtime: number;
 }
 
-const AGENT_TAGS = ["claude", "gemini"];
+/** Agents that make conversation logs; any other tag on a log note is not an agent. */
+export const AGENT_TAGS = ["claude", "gemini"];
 
 /** Section headings of a log that are not conversation entries. */
 const NON_ENTRY_HEADINGS = ["sumário", "decisões e fatos da sessão"];
@@ -79,6 +92,12 @@ export function toRecord(src: LogSource): LogRecord | undefined {
     sessao: text(src.frontmatter.sessao),
     entries: src.headings.filter((h) => !NON_ENTRY_HEADINGS.includes(h.toLowerCase())),
     mtime: src.mtime,
+    transcript: text(src.frontmatter.jsonl_caminho),
+    subagent: tags.includes("subagente"),
+    name: src.basename,
+    parent: tags.includes("subagente") ? unwikilink(text(src.frontmatter.up)) : undefined,
+    fork: tags.includes("fork") && !tags.includes("subagente"),
+    forkOf: tags.includes("fork") && !tags.includes("subagente") ? text(src.frontmatter.sessao_pai) : undefined,
   };
 }
 
@@ -122,4 +141,70 @@ export function filterLogs(records: LogRecord[], f: LogFilters): LogRecord[] {
 
 export function distinct(records: LogRecord[], pick: (r: LogRecord) => string | undefined): string[] {
   return [...new Set(records.map(pick).filter((v): v is string => v !== undefined))].sort((a, b) => a.localeCompare(b));
+}
+
+export interface LogGroup {
+  record: LogRecord;
+  /** Subagent logs of this conversation, in the order they ran. */
+  children: LogRecord[];
+  /** Logs of the forks of this conversation (KAN-10), in the order they were made; a group apart from the subagents. */
+  forks: LogRecord[];
+}
+
+/** Session id with the `local_` prefix of the desktop app removed, so `sessao` and `sessao_pai` compare equal. */
+const bareSession = (id: string): string => id.replace(/^local_/, "");
+
+/** Returns a function that finds the conversation (not itself a fork) a fork log descends from, or undefined when its log is unknown. */
+function forkRootResolver(all: LogRecord[]): (fork: LogRecord) => LogRecord | undefined {
+  const bySession = new Map<string, LogRecord>();
+  for (const r of all) if (!r.subagent && r.sessao) bySession.set(bareSession(r.sessao), r);
+  return (fork) => {
+    const seen = new Set<string>([fork.path]);
+    let parent = fork.forkOf ? bySession.get(bareSession(fork.forkOf)) : undefined;
+    while (parent && !seen.has(parent.path)) {
+      if (!parent.fork) return parent;
+      seen.add(parent.path);
+      parent = parent.forkOf ? bySession.get(bareSession(parent.forkOf)) : undefined;
+    }
+    return undefined;
+  };
+}
+
+/** The log of the conversation a fork log was forked from (the root of the chain for a fork of a fork). */
+export function forkRootOf(fork: LogRecord, all: LogRecord[]): LogRecord | undefined {
+  return fork.fork ? forkRootResolver(all)(fork) : undefined;
+}
+
+/**
+ * Puts each subagent log and each fork log under the log of the conversation they came from. A subagent or fork
+ * whose conversation log is not in `all` stays on its own. A conversation that matched only through its subagents
+ * or forks is listed too. A fork of a fork is listed under the conversation at the root of the chain.
+ */
+export function groupLogs(shown: LogRecord[], all: LogRecord[]): LogGroup[] {
+  const byName = new Map<string, LogRecord>();
+  for (const r of all) if (!r.subagent) byName.set(r.name, r);
+  const rootOfFork = forkRootResolver(all);
+  const groups = new Map<string, LogGroup>();
+  const order: LogGroup[] = [];
+  const groupOf = (record: LogRecord): LogGroup => {
+    let g = groups.get(record.path);
+    if (!g) {
+      g = { record, children: [], forks: [] };
+      groups.set(record.path, g);
+      order.push(g);
+    }
+    return g;
+  };
+  for (const r of shown) {
+    const subagentParent = r.subagent && r.parent ? byName.get(r.parent) : undefined;
+    const forkParent = r.fork ? rootOfFork(r) : undefined;
+    if (subagentParent) groupOf(subagentParent).children.push(r);
+    else if (forkParent) groupOf(forkParent).forks.push(r);
+    else groupOf(r);
+  }
+  for (const g of order) {
+    g.children.sort((a, b) => a.date - b.date);
+    g.forks.sort((a, b) => a.date - b.date);
+  }
+  return order;
 }

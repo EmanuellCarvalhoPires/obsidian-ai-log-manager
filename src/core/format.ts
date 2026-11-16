@@ -1,6 +1,7 @@
 // Text of a log entry: title, "Solicitação" and "Resposta". Port of generate_entry_title(),
 // format_solicitacao(), format_resposta() and normalize_session_name() from
 // scripts/gerar_log_conversa.py.
+import { redactSecrets } from "./redactor";
 import type { Turn } from "./transcript";
 import { baseName, decodeUri, shortenAtWord } from "./text-utils";
 
@@ -28,7 +29,7 @@ export function generateEntryTitle(turn: Pick<Turn, "userText" | "rawText" | "im
     return `Link da nota [[${note}]]`;
   }
 
-  let clean = (turn.userText || "").replace(/https?:\/\/\S+/g, "");
+  let clean = redactSecrets(turn.userText || "").replace(/https?:\/\/\S+/g, "");
   clean = clean.replace(/@"[^"]+"/g, "").replace(/obsidian:\/\/\S+/g, "").replace(/[#*`_]/g, "").trim();
   const sentence = firstSentence(clean);
   if (sentence.length >= 5 && sentence.length <= 55) return sentence;
@@ -46,11 +47,11 @@ export function generateEntryTitle(turn: Pick<Turn, "userText" | "rawText" | "im
   }
 
   if (sessionName && !["sessão claude code", "untitled session"].includes(sessionName.toLowerCase())) {
-    return sessionName.slice(0, 50);
+    return redactSecrets(sessionName).slice(0, 50);
   }
 
   for (const text of turn.assistantTexts) {
-    for (const rawLine of text.split("\n")) {
+    for (const rawLine of redactSecrets(text).split("\n")) {
       const line = rawLine.replace(/^#+\s*/, "").trim().replace(/^Caminho [AB][^:]*:\s*/, "").trim();
       if (line.length >= 10 && !/^(http|```|\{|<)/.test(line)) {
         const sent = cutSentence(line);
@@ -68,9 +69,9 @@ export function generateEntryTitle(turn: Pick<Turn, "userText" | "rawText" | "im
   return "Solicitação do usuário";
 }
 
-export function formatSolicitacao(turn: Pick<Turn, "userText" | "rawText" | "imagesCount">): string {
+export function formatSolicitacao(turn: Pick<Turn, "userText" | "rawText" | "imagesCount">, externalRedact?: (text: string) => string): string {
   const parts: string[] = [];
-  let source = turn.rawText || turn.userText;
+  let source = redactSecrets(turn.rawText || turn.userText, externalRedact);
   source = source
     .split("\n")
     .filter((l) => !QUOTE_LINE.test(l))
@@ -88,7 +89,7 @@ export function formatSolicitacao(turn: Pick<Turn, "userText" | "rawText" | "ima
     parts.push(`enviou link \`${urls[0]}\``);
   }
 
-  const clean = (turn.userText || source)
+  const clean = redactSecrets(turn.userText || source, externalRedact)
     .replace(/https?:\/\/\S+/g, "")
     .replace(/@"[^"]+"/g, "")
     .replace(/obsidian:\/\/\S+/g, "")
@@ -108,12 +109,12 @@ const CLOSING_PATTERNS = [
   /deseja que eu/i,
 ];
 
-export function formatResposta(turn: Pick<Turn, "assistantTexts" | "filesModified">): string {
+export function formatResposta(turn: Pick<Turn, "assistantTexts" | "filesModified">, externalRedact?: (text: string) => string): string {
   const actions: string[] = [];
   if (turn.filesModified.length > 0) {
     actions.push(`Arquivos modificados/criados: ${turn.filesModified.map((f) => `\`${f}\``).join(", ")}.`);
   }
-  const full = turn.assistantTexts.join("\n\n").trim();
+  const full = redactSecrets(turn.assistantTexts.join("\n\n").trim(), externalRedact);
   if (!full) return actions.length > 0 ? actions.join(" ") : "Solicitação processada e concluída.";
 
   const cleaned: string[] = [];
@@ -170,12 +171,12 @@ export function cleanHeadingTitle(title: string): string {
     .trim();
 }
 
-export function buildEntry(turn: Turn, sessionName = ""): Entry {
-  const title = cleanHeadingTitle(generateEntryTitle(turn, sessionName)) || "Solicitação do usuário";
+export function buildEntry(turn: Turn, sessionName = "", externalRedact?: (text: string) => string): Entry {
+  const title = redactSecrets(cleanHeadingTitle(generateEntryTitle(turn, sessionName)), externalRedact) || "Solicitação do usuário";
   const heading = `${turn.timestamp} - ${title}`;
   return {
     heading,
     summaryLink: `- [[#${heading}|${heading}]]`,
-    markdown: `## ${heading}\n\n**Solicitação:** ${formatSolicitacao(turn)}\n\n**Resposta:** ${formatResposta(turn)}\n`,
+    markdown: `## ${heading}\n\n**Solicitação:** ${formatSolicitacao(turn, externalRedact)}\n\n**Resposta:** ${formatResposta(turn, externalRedact)}\n`,
   };
 }

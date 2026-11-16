@@ -73,6 +73,16 @@ export class ObsidianVaultPort implements VaultPort {
     await this.app.fileManager.renameFile(this.file(path), normalizePath(newPath));
   }
 
+  findKanbanCard(cardsFolder: string, key: string): string | undefined {
+    const prefix = `${normalizePath(cardsFolder)}/`;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!file.path.startsWith(prefix)) continue;
+      const fmKey: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.key;
+      if (typeof fmKey === "string" ? fmKey.trim() === key : file.basename.startsWith(`${key} `)) return file.path;
+    }
+    return undefined;
+  }
+
   async ensureFolder(path: string): Promise<void> {
     const parts = normalizePath(path).split("/");
     let current = "";

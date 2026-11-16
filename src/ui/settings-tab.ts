@@ -1,6 +1,6 @@
-// Settings tab (imperative, Obsidian-standard) for the AI Log Manager plugin.
-import { Notice, PluginSettingTab, Setting, setIcon } from "obsidian";
-import type { App, Plugin } from "obsidian";
+// Declarative settings tab (Obsidian 1.13+) for the AI Log Manager plugin.
+import { Notice, PluginSettingTab, setIcon } from "obsidian";
+import type { App, Plugin, Setting, SettingDefinitionItem } from "obsidian";
 import type { ConnectorStatus } from "../ecosystem/connector";
 import { installEcosystem } from "../ecosystem/dependency-modal";
 import { t } from "../i18n";
@@ -11,6 +11,7 @@ export interface SettingsHost {
   saveSettings(): Promise<void>;
   getConnectorStatus(): { status: ConnectorStatus; detail?: string };
   hooksInstalled(): Promise<boolean>;
+  nodeAvailable?(): Promise<boolean>;
   installHooks(): Promise<void>;
   reconcileNow(): Promise<void>;
 }
@@ -35,26 +36,191 @@ export class AILogManagerSettingTab extends PluginSettingTab {
 
   refresh(): void {
     try {
-      if (this.containerEl.isShown()) this.display();
+      if (this.containerEl.isShown()) this.update();
     } catch (err) {
       console.debug("[AI Log Manager] Could not refresh the settings tab", err);
     }
   }
 
-  display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
-    this.renderEcosystem(containerEl);
-    this.renderEngine(containerEl);
-    this.renderProjects(containerEl);
-    void this.renderHooks(containerEl);
+  getControlValue(key: string): unknown {
+    const s = this.host.settings;
+    switch (key) {
+      case "mode":
+        return s.mode;
+      case "watch":
+        return s.watch;
+      case "debounceSeconds":
+        return s.debounceSeconds;
+      case "trackedFolders":
+        return s.trackedFolders.join("\n");
+      case "projectsRoot":
+        return s.projectsRoot;
+      case "projectLogsFolder":
+        return s.projectLogsFolder;
+      default:
+        return undefined;
+    }
   }
 
-  private renderEcosystem(el: HTMLElement): void {
-    new Setting(el).setHeading().setName(t("settings.ecosystem.heading"));
+  setControlValue(key: string, value: unknown): void {
+    const s = this.host.settings;
+    switch (key) {
+      case "mode":
+        s.mode = value === "observe" ? "observe" : "active";
+        break;
+      case "watch":
+        s.watch = Boolean(value);
+        break;
+      case "debounceSeconds": {
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 1 && n <= 120) s.debounceSeconds = n;
+        break;
+      }
+      case "trackedFolders":
+        s.trackedFolders = (typeof value === "string" ? value : "")
+          .split("\n")
+          .map((l) => l.trim())
+          .filter((l) => l !== "");
+        break;
+      case "projectsRoot":
+        s.projectsRoot = (typeof value === "string" ? value : "").trim().replace(/\/+$/, "") || "Projetos";
+        break;
+      case "projectLogsFolder":
+        s.projectLogsFolder = (typeof value === "string" ? value : "").trim().replace(/^\/+|\/+$/g, "") || "Logs";
+        break;
+      default:
+        return;
+    }
+    void this.host.saveSettings();
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        type: "group",
+        heading: t("settings.ecosystem.heading"),
+        items: [
+          {
+            name: t("settings.ecosystem.heading"),
+            render: (row: Setting) => {
+              this.renderEcosystemRow(row);
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: t("settings.engine.heading"),
+        items: [
+          {
+            name: t("settings.engine.mode"),
+            desc: t("settings.engine.modeDesc"),
+            control: {
+              type: "dropdown",
+              key: "mode",
+              options: {
+                active: t("settings.engine.modeActive"),
+                observe: t("settings.engine.modeObserve"),
+              },
+            },
+          },
+          {
+            name: t("settings.engine.watch"),
+            desc: t("settings.engine.watchDesc"),
+            control: {
+              type: "toggle",
+              key: "watch",
+            },
+          },
+          {
+            name: t("settings.engine.debounce"),
+            desc: t("settings.engine.debounceDesc"),
+            control: {
+              type: "number",
+              key: "debounceSeconds",
+              min: 1,
+              max: 120,
+              step: 1,
+            },
+          },
+          {
+            name: t("settings.engine.folders"),
+            desc: t("settings.engine.foldersDesc"),
+            render: (row: Setting) => {
+              row.setName(t("settings.engine.folders")).setDesc(t("settings.engine.foldersDesc"));
+              row.addTextArea((ta) => {
+                ta.setValue(this.host.settings.trackedFolders.join("\n")).onChange((v) => {
+                  this.setControlValue("trackedFolders", v);
+                });
+                ta.inputEl.rows = 3;
+                ta.inputEl.addClass("ailm-mono");
+              });
+            },
+          },
+          {
+            name: t("settings.engine.reconcile"),
+            desc: t("settings.engine.reconcileDesc"),
+            render: (row: Setting) => {
+              row
+                .setName(t("settings.engine.reconcile"))
+                .setDesc(t("settings.engine.reconcileDesc"))
+                .addButton((btn) =>
+                  btn
+                    .setButtonText(t("settings.engine.reconcileButton"))
+                    .setIcon("refresh-cw")
+                    .onClick(() => {
+                      btn.setDisabled(true);
+                      void this.host.reconcileNow().finally(() => {
+                        btn.setDisabled(false);
+                      });
+                    }),
+                );
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: t("settings.project.heading"),
+        items: [
+          {
+            name: t("settings.project.root"),
+            desc: t("settings.project.rootDesc"),
+            control: {
+              type: "text",
+              key: "projectsRoot",
+            },
+          },
+          {
+            name: t("settings.project.logsFolder"),
+            desc: t("settings.project.logsFolderDesc"),
+            control: {
+              type: "text",
+              key: "projectLogsFolder",
+            },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: t("settings.hooks.heading"),
+        items: [
+          {
+            name: t("settings.hooks.install"),
+            desc: t("settings.hooks.installDesc"),
+            render: (row: Setting) => {
+              this.renderHooksRow(row);
+            },
+          },
+        ],
+      },
+    ];
+  }
+
+  private renderEcosystemRow(row: Setting): void {
     const { status, detail } = this.host.getConnectorStatus();
     const meta = STATUS_ICON[status];
-    const row = new Setting(el).setName(t(`core.status.${status === "connected" ? "connected" : status}`)).setDesc(detail ?? "");
+    row.setName(t(`core.status.${status === "connected" ? "connected" : status}`)).setDesc(detail ?? "");
     const icon = createSpan({ cls: `ailm-status-icon ailm-status-${meta.state}` });
     setIcon(icon, meta.icon);
     row.nameEl.prepend(icon);
@@ -69,7 +235,7 @@ export class AILogManagerSettingTab extends PluginSettingTab {
             void installEcosystem(this.app)
               .then(() => {
                 new Notice(t("dependency.installed"));
-                this.display();
+                this.update();
               })
               .catch(() => {
                 new Notice(t("dependency.failed"));
@@ -80,121 +246,33 @@ export class AILogManagerSettingTab extends PluginSettingTab {
     }
   }
 
-  private renderEngine(el: HTMLElement): void {
-    new Setting(el).setHeading().setName(t("settings.engine.heading"));
-    const s = this.host.settings;
-
-    new Setting(el)
-      .setName(t("settings.engine.mode"))
-      .setDesc(t("settings.engine.modeDesc"))
-      .addDropdown((dd) =>
-        dd
-          .addOption("active", t("settings.engine.modeActive"))
-          .addOption("observe", t("settings.engine.modeObserve"))
-          .setValue(s.mode)
-          .onChange((v) => {
-            s.mode = v === "observe" ? "observe" : "active";
-            void this.host.saveSettings();
-          }),
-      );
-
-    new Setting(el)
-      .setName(t("settings.engine.watch"))
-      .setDesc(t("settings.engine.watchDesc"))
-      .addToggle((tg) =>
-        tg.setValue(s.watch).onChange((v) => {
-          s.watch = v;
-          void this.host.saveSettings();
-        }),
-      );
-
-    new Setting(el)
-      .setName(t("settings.engine.debounce"))
-      .setDesc(t("settings.engine.debounceDesc"))
-      .addText((tx) =>
-        tx.setValue(String(s.debounceSeconds)).onChange((v) => {
-          const n = Number(v);
-          if (Number.isFinite(n) && n >= 1 && n <= 120) {
-            s.debounceSeconds = n;
-            void this.host.saveSettings();
-          }
-        }),
-      );
-
-    new Setting(el)
-      .setName(t("settings.engine.folders"))
-      .setDesc(t("settings.engine.foldersDesc"))
-      .addTextArea((ta) => {
-        ta.setValue(s.trackedFolders.join("\n")).onChange((v) => {
-          s.trackedFolders = v
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l !== "");
-          void this.host.saveSettings();
-        });
-        ta.inputEl.rows = 3;
-        ta.inputEl.addClass("ailm-mono");
-      });
-
-    new Setting(el)
-      .setName(t("settings.engine.reconcile"))
-      .setDesc(t("settings.engine.reconcileDesc"))
-      .addButton((btn) =>
-        btn
-          .setButtonText(t("settings.engine.reconcileButton"))
-          .setIcon("refresh-cw")
-          .onClick(() => {
-            btn.setDisabled(true);
-            // Block body on purpose: returning the button (a thenable) would make the Promise loop forever.
-            void this.host.reconcileNow().finally(() => {
+  private renderHooksRow(row: Setting): void {
+    row.setName(t("settings.hooks.install")).setDesc(t("settings.hooks.installDesc"));
+    row.addButton((btn) =>
+      btn
+        .setButtonText(t("settings.hooks.installButton"))
+        .setIcon("webhook")
+        .onClick(() => {
+          btn.setDisabled(true);
+          void this.host
+            .installHooks()
+            .then(() => {
+              this.update();
+            })
+            .finally(() => {
               btn.setDisabled(false);
             });
-          }),
-      );
-  }
-
-  private renderProjects(el: HTMLElement): void {
-    new Setting(el).setHeading().setName(t("settings.project.heading"));
-    const s = this.host.settings;
-    new Setting(el)
-      .setName(t("settings.project.root"))
-      .setDesc(t("settings.project.rootDesc"))
-      .addText((tx) =>
-        tx.setValue(s.projectsRoot).onChange((v) => {
-          s.projectsRoot = v.trim().replace(/\/+$/, "") || "Projetos";
-          void this.host.saveSettings();
         }),
-      );
-    new Setting(el)
-      .setName(t("settings.project.logsFolder"))
-      .setDesc(t("settings.project.logsFolderDesc"))
-      .addText((tx) =>
-        tx.setValue(s.projectLogsFolder).onChange((v) => {
-          s.projectLogsFolder = v.trim().replace(/^\/+|\/+$/g, "") || "Logs";
-          void this.host.saveSettings();
-        }),
-      );
-  }
-
-  private async renderHooks(el: HTMLElement): Promise<void> {
-    const installed = await this.host.hooksInstalled();
-    new Setting(el).setHeading().setName(t("settings.hooks.heading"));
-    new Setting(el)
-      .setName(t("settings.hooks.install"))
-      .setDesc(`${t("settings.hooks.installDesc")} ${t("settings.hooks.state", { state: installed ? t("settings.hooks.installed") : t("settings.hooks.notInstalled") })}`)
-      .addButton((btn) =>
-        btn
-          .setButtonText(t("settings.hooks.installButton"))
-          .setIcon("webhook")
-          .onClick(() => {
-            btn.setDisabled(true);
-            void this.host
-              .installHooks()
-              .then(() => this.display())
-              .finally(() => {
-                btn.setDisabled(false);
-              });
-          }),
-      );
+    );
+    void Promise.all([
+      this.host.hooksInstalled(),
+      this.host.nodeAvailable ? this.host.nodeAvailable() : Promise.resolve(true),
+    ]).then(([installed, nodeOk]) => {
+      const stateText = t("settings.hooks.state", {
+        state: installed ? t("settings.hooks.installed") : t("settings.hooks.notInstalled"),
+      });
+      const warn = nodeOk ? "" : ` ${t("settings.hooks.nodeMissing")}`;
+      row.setDesc(`${t("settings.hooks.installDesc")} ${stateText}${warn}`);
+    });
   }
 }

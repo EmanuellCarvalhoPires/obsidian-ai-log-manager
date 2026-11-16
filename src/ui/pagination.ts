@@ -21,6 +21,7 @@ export function paginate<T>(items: T[], page: number, pageSize: number): Paginat
 
 /**
  * Creates a pagination footer with a 'Show more' button when hasMore is true.
+ * Returns the footer, so the caller can load the next page by itself when it scrolls into view.
  */
 export function renderPaginationControls(
   container: HTMLElement,
@@ -29,8 +30,8 @@ export function renderPaginationControls(
   total: number,
   onShowMore: () => void,
   labels?: { showMore?: string; info?: string },
-): void {
-  if (!hasMore && total <= shownCount) return;
+): HTMLElement | undefined {
+  if (!hasMore && total <= shownCount) return undefined;
   const wrap = container.createDiv({ cls: "ailm-pagination-wrap" });
   if (labels?.info) {
     wrap.createSpan({ text: labels.info, cls: "ailm-pagination-info ailm-muted" });
@@ -44,4 +45,5 @@ export function renderPaginationControls(
     });
     btn.addEventListener("click", onShowMore);
   }
+  return wrap;
 }

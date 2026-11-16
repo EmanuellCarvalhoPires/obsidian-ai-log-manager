@@ -3,7 +3,7 @@ import type { HookHandler } from "../../src/core/hook-handler";
 import { SessionLocator } from "../../src/core/session-locator";
 import type { HubCallContext, HubTool } from "../../src/ecosystem/types";
 import { ACTIVE_WINDOW_MS, buildTools, resolveSession } from "../../src/tools/log-module";
-import { assistantLine, makeHarness, toolUseLine, userLine } from "../helpers/memory-ports";
+import { assistantLine, makeHarness, toolResultLine, toolUseLine, userLine } from "../helpers/memory-ports";
 
 const TZ = -180;
 const T1 = "2026-10-21T15:00:00.000Z";
@@ -32,11 +32,33 @@ function setup() {
 }
 
 describe("log-module tools", () => {
-  it("offers logs_set and no longer offers logs_create", () => {
-    const { tools } = setup();
-    const names = tools.map((t) => t.name);
-    expect(names).toContain("logs_set");
-    expect(names).not.toContain("logs_create");
+  it("offers logs_set and logs_create as a deprecated alias that runs logs_set", async () => {
+    const { h, tools, call } = setup();
+    expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["logs_set", "logs_create"]));
+    h.disk.put(h.transcript, userLine("Faz algo longo", T1) + toolUseLine("Bash", { command: "npm test" }, T2), 1000);
+    const res = await call("logs_create", { sessao: "sess-1", titulo: "Pelo alias" });
+    expect(res.isError).toBe(false);
+    expect(res.data.title).toBe("Pelo alias");
+    expect(String(res.data.notice)).toContain("logs_set");
+  });
+
+  it("logs_set accepts the project as [[Nome]], path, other case and accents, and suggests the closest one", async () => {
+    const { h, call } = setup();
+    h.vault.projectList = [{ name: "Mindcraft CE", folder: "Projetos/Mindcraft CE", clonePath: undefined }, { name: "Clonador de Projetos", folder: "Projetos/Clonador", clonePath: undefined }];
+    h.disk.put(h.transcript, userLine("Faz algo longo", T1) + toolUseLine("Bash", { command: "npm test" }, T2), 1000);
+    for (const name of ["[[Mindcraft CE]]", "Projetos/Mindcraft CE.md", "[[Projetos/Mindcraft CE|alias]]", "MINDCRAFT  ce"]) {
+      const res = await call("logs_set", { sessao: "sess-1", projeto: name });
+      expect(res.isError, name).toBe(false);
+      expect(res.data.project).toBe("Mindcraft CE");
+    }
+    const typo = await call("logs_set", { sessao: "sess-1", projeto: "Clonadór de Projeto" });
+    expect(typo.isError).toBe(true);
+    expect(String(typo.data.error)).toContain('Did you mean "Clonador de Projetos"?');
+    const partial = await call("logs_set", { sessao: "sess-1", projeto: "Mindcraft" });
+    expect(String(partial.data.error)).toContain('Did you mean "Mindcraft CE"?');
+    const missing = await call("logs_set", { sessao: "sess-1", projeto: "[[Mindkraft Cee]]" });
+    expect(missing.isError).toBe(true);
+    expect(String(missing.data.error)).toContain('Did you mean "Mindcraft CE"?');
   });
 
   it("logs_set without arguments fails with a clear message", async () => {
@@ -136,6 +158,73 @@ describe("resolveSession", () => {
   it("fails when there is no transcript at all", async () => {
     const { resolve } = make();
     expect(await resolve()).toEqual({ error: "No conversation found." });
+  });
+});
+
+describe("resolution with several active conversations", () => {
+  const NOW = Date.now();
+  const dir = "C:/home/.claude/projects/proj";
+  const use = (id: string, name: string, input: Record<string, unknown>) =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id, name, input }] } }) + "\n";
+  const result = (id: string) =>
+    JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } }) + "\n";
+  const prompt = (t: string) => userLine(t, T1);
+
+  function two(aTail: string, bTail: string) {
+    const { h, locator, call } = setup();
+    h.disk.put(`${dir}/a.jsonl`, prompt("Primeira sessão") + aTail, NOW - 1000);
+    h.disk.put(`${dir}/b.jsonl`, prompt("Segunda sessão") + bTail, NOW - 2000);
+    const resolve = (explicit?: unknown, tool = "logs_set", args: Record<string, unknown> = {}) =>
+      resolveSession({ locator, store: h.store }, explicit, () => NOW, { tool, args });
+    return { h, call, resolve };
+  }
+
+  it("picks the conversation with a pending tools_run call that matches the arguments", async () => {
+    const args = { titulo: "Título X" };
+    const { resolve } = two(
+      use("t1", "mcp__AI-Ecosystem__tools_run", { id: "logs_set", args: { titulo: "Outro" } }) + result("t1"),
+      use("t2", "mcp__AI-Ecosystem__tools_run", { id: "logs_set", args }),
+    );
+    expect(await resolve(undefined, "logs_set", args)).toEqual({ session: "b" });
+  });
+
+  it("finds the call inside input.calls and direct tool names", async () => {
+    const { resolve } = two(
+      use("t1", "mcp__x__tools_run", { calls: [{ id: "logs_status", args: {} }, { id: "logs_add_fact", args: { fatos: ["f"] } }] }),
+      use("t2", "mcp__x__logs_update", {}),
+    );
+    expect(await resolve(undefined, "logs_add_fact", { fatos: ["f"] })).toEqual({ session: "a" });
+    expect(await resolve(undefined, "logs_update", {})).toEqual({ session: "b" });
+  });
+
+  it("treats a tool_use without id as pending only when no tool_result follows it", async () => {
+    const noId = JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "mcp__x__tools_run", input: { id: "logs_set", args: { titulo: "T" } } }] } }) + "\n";
+    const { resolve } = two(noId + toolResultLine(T2), noId);
+    expect(await resolve(undefined, "logs_set", { titulo: "T" })).toEqual({ session: "b" });
+  });
+
+  it('"self" works like an empty sessao', async () => {
+    const args = { titulo: "T" };
+    const { resolve } = two(use("t1", "mcp__x__tools_run", { id: "logs_set", args }), "");
+    expect(await resolve("self", "logs_set", args)).toEqual({ session: "a" });
+  });
+
+  it("through logs_set: the call goes to the calling conversation", async () => {
+    const args = { titulo: "Título certo" };
+    const { h, call } = two("", use("t2", "mcp__x__tools_run", { id: "logs_set", args }));
+    const res = await call("logs_set", args);
+    expect(res.isError).toBe(false);
+    expect(res.data.session).toBe("b");
+    expect(h.store.get("a")).toBeUndefined();
+  });
+
+  it("stays ambiguous when nothing matches and lists the candidates with the log title", async () => {
+    const { h, resolve } = two(use("t1", "mcp__x__tools_run", { id: "logs_rename", args: {} }), "");
+    h.store.set({ sessao: "a", hostSessionId: "", caminhoTranscript: "", offset: 0, mtimeMs: 0, hashUltimoRegistro: "", notaLog: "Knowledge/Logs/21-10-2026 - 12h00 - Plugin de logs.md", projeto: undefined });
+    const res = await resolve(undefined, "logs_set", { titulo: "T" });
+    const message = "error" in res ? res.error : "";
+    expect(message).toContain('a - log "Plugin de logs"');
+    expect(message).toContain("b (");
   });
 });
 

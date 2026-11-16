@@ -7,6 +7,19 @@ export function createNodeDisk(): DiskPort {
     async readText(path: string): Promise<string> {
       return fs.readFile(path, "utf8");
     },
+    async readFrom(path: string, offset: number): Promise<string> {
+      if (offset <= 0) return fs.readFile(path, "utf8");
+      const handle = await fs.open(path, "r");
+      try {
+        const st = await handle.stat();
+        if (offset >= st.size) return "";
+        const buf = Buffer.allocUnsafe(st.size - offset);
+        const { bytesRead } = await handle.read(buf, 0, buf.length, offset);
+        return buf.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+    },
     async stat(path: string): Promise<FileStat | undefined> {
       try {
         const st = await fs.stat(path);

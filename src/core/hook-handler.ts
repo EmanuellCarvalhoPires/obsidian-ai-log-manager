@@ -12,6 +12,7 @@ export interface HookEvent {
   cwd?: string;
   transcript_path?: string;
   prompt?: string;
+  recebido_em?: number;
 }
 
 /** Asks the person whether a repository becomes a development project (decision D7). */
@@ -45,12 +46,20 @@ export class HookHandler {
     const evento = text(r.evento) ?? text(r.hook_event_name);
     const sessao = text(r.sessao) ?? text(r.session_id);
     if (!evento || !sessao) return undefined;
+    const rawTime = r.recebido_em;
+    const recebido_em =
+      typeof rawTime === "number" && Number.isFinite(rawTime)
+        ? rawTime
+        : typeof rawTime === "string" && Number.isFinite(Date.parse(rawTime))
+          ? Date.parse(rawTime)
+          : undefined;
     return {
       evento,
       sessao,
       cwd: text(r.cwd),
       transcript_path: text(r.transcript_path),
       prompt: text(r.prompt),
+      recebido_em,
     };
   }
 
@@ -80,12 +89,20 @@ export class HookHandler {
       : this.engine.syncSession(event.sessao, { force: true, flush });
   }
 
+  /**
+   * Automatically links a conversation to a project only when the conversation has no project yet (LM-06).
+   * Later mentions of other projects go to `projetos_citados` without overwriting `projeto`.
+   */
   private async linkByPrompt(event: HookEvent): Promise<HookResult> {
     if (!event.prompt) return { ok: true, action: "no-prompt" };
+    const known = this.store.get(event.sessao)?.projeto;
+    if (known) return { ok: true, action: "already-linked", detail: known };
+    if (event.cwd) {
+      const decision = await this.tracker.resolve(event.cwd);
+      if (decision.track && decision.project) return { ok: true, action: "already-linked", detail: decision.project.name };
+    }
     const project = await this.tracker.matchByPrompt(event.prompt);
     if (!project) return { ok: true, action: "no-project" };
-    const known = this.store.get(event.sessao)?.projeto;
-    if (known === project.name) return { ok: true, action: "already-linked" };
     const res = await this.engine.linkProject(event.sessao, project, [], event.transcript_path);
     return { ok: true, action: res.linked ? "linked" : "link-pending", detail: project.name };
   }

@@ -31,6 +31,14 @@ export function createMockElement(tag = "div", opts: any = {}): any {
     children,
     dataset: {},
     style: {},
+    isShown: () => true,
+    toggleClass(c: string, on: boolean) {
+      if (on) classes.add(c);
+      else classes.delete(c);
+    },
+    setCssProps(props: Record<string, string>) {
+      Object.assign(el.style, props);
+    },
     attrs,
     classList: {
       add: (...c: string[]) => c.forEach((x) => classes.add(x)),
@@ -62,6 +70,11 @@ export function createMockElement(tag = "div", opts: any = {}): any {
     getAttribute(k: string) {
       return attrs[k] ?? null;
     },
+    removeAttribute(k: string) {
+      delete attrs[k];
+    },
+    scrollIntoView() {},
+    focus() {},
     setText(text: string) {
       el.textContent = text;
     },
@@ -247,6 +260,9 @@ export class ItemView extends Component {
     this.app = leaf?.app;
     this.containerEl.children.push(createMockElement("div"), this.contentEl);
   }
+  addAction(_icon: string, _title: string, _cb: () => void): any {
+    return createMockElement("div");
+  }
   getViewType() {
     return "";
   }
@@ -288,7 +304,9 @@ export class PluginSettingTab {
     this.app = app;
     this.plugin = plugin;
   }
+  icon = "";
   display() {}
+  update() {}
   hide() {}
 }
 
@@ -481,3 +499,27 @@ export function getAllTags(cache: any): string[] | null {
 export const MarkdownRenderer = {
   async render(_app: any, _md: string, _el: any, _path: string, _c: any): Promise<void> {},
 };
+
+export function addIcon(_name: string, _svg: string): void {}
+
+export class Menu {
+  items: any[] = [];
+  addItem(cb: (item: any) => void): this {
+    const item: any = {};
+    for (const k of ["setTitle", "setIcon", "onClick", "setWarning"]) item[k] = () => item;
+    cb(item);
+    this.items.push(item);
+    return this;
+  }
+  addSeparator(): this {
+    return this;
+  }
+  showAtMouseEvent(): this {
+    return this;
+  }
+}
+export class FuzzySuggestModal<T> {
+  constructor(public app: any) {}
+  setPlaceholder(): void {}
+  open(): void {}
+}

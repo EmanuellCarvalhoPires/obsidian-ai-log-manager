@@ -20,6 +20,13 @@ export class MemoryDisk implements DiskPort {
     if (!f) throw new Error(`ENOENT ${path}`);
     return f.text;
   }
+  async readFrom(path: string, offset: number): Promise<string> {
+    const f = this.files.get(path);
+    if (!f) throw new Error(`ENOENT ${path}`);
+    if (offset <= 0) return f.text;
+    const buf = Buffer.from(f.text, "utf8");
+    return offset >= buf.length ? "" : buf.subarray(offset).toString("utf8");
+  }
   async stat(path: string): Promise<FileStat | undefined> {
     const f = this.files.get(path);
     return f ? { size: Buffer.byteLength(f.text), mtimeMs: f.mtimeMs } : undefined;
@@ -94,27 +101,34 @@ export class MemoryVault implements VaultPort {
     this.notes.delete(path);
   }
   async ensureFolder(): Promise<void> {}
+  findKanbanCard(cardsFolder: string, key: string): string | undefined {
+    for (const [path, content] of this.notes) {
+      if (path.startsWith(`${cardsFolder}/`) && new RegExp(`^key: ${key}\\s*$`, "m").test(content)) return path;
+    }
+    return undefined;
+  }
 }
 
 export interface Harness {
   disk: MemoryDisk;
   vault: MemoryVault;
   store: CheckpointStore;
+  locator: SessionLocator;
   engine: LogEngine;
   settings: LogSettings;
   tracker: ProjectTracker;
   transcript: string;
 }
 
-export function makeHarness(overrides: Partial<LogSettings> = {}): Harness {
+export function makeHarness(overrides: Partial<LogSettings> = {}, now: () => number = () => 0): Harness {
   const disk = new MemoryDisk();
   const vault = new MemoryVault();
   const settings: LogSettings = { ...DEFAULT_LOG_SETTINGS, claudeHome: "C:/home/.claude", ...overrides };
   const store = new CheckpointStore({ load: async () => undefined, save: async () => undefined }, () => 5000);
-  const locator = new SessionLocator(disk, () => settings.claudeHome, () => 0);
-  const tracker = new ProjectTracker(vault, disk, () => settings, () => 0);
-  const engine = new LogEngine({ disk, vault, locator, tracker, store, settings: () => settings });
-  return { disk, vault, store, engine, settings, tracker, transcript: `${settings.claudeHome}/projects/proj/sess-1.jsonl` };
+  const locator = new SessionLocator(disk, () => settings.claudeHome, now);
+  const tracker = new ProjectTracker(vault, disk, () => settings, now);
+  const engine = new LogEngine({ disk, vault, locator, tracker, store, settings: () => settings, now });
+  return { disk, vault, store, locator, engine, settings, tracker, transcript: `${settings.claudeHome}/projects/proj/sess-1.jsonl` };
 }
 
 // Transcript line builders.

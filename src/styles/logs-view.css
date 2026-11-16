@@ -1,16 +1,24 @@
-/* Logs screen (prefix: ailm-). */
+/* Logs screen (prefix: ailm-). Colors come from the Obsidian theme, so the screen follows light, dark and any theme. */
 .ailm-logs {
+  --ailm-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ailm-fast: 120ms;
+  --ailm-med: 220ms;
   display: flex;
   flex-direction: column;
   height: 100%;
   padding: 0;
 }
 
+.ailm-logs .is-hidden {
+  display: none !important;
+}
+
+/* ---- Toolbar ---------------------------------------------------------------- */
 .ailm-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--background-modifier-border);
 }
@@ -24,6 +32,13 @@
 .ailm-search input {
   width: 100%;
   padding-left: 28px;
+  padding-right: 28px;
+}
+
+/* The screen draws its own clear button, so the browser's is hidden. */
+.ailm-search input[type="search"]::-webkit-search-cancel-button {
+  display: none;
+  -webkit-appearance: none;
 }
 
 .ailm-search-icon {
@@ -33,6 +48,7 @@
   transform: translateY(-50%);
   display: inline-flex;
   color: var(--text-muted);
+  pointer-events: none;
 }
 
 .ailm-search-icon svg {
@@ -40,28 +56,161 @@
   height: 14px;
 }
 
+.ailm-search-clear {
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .ailm-date {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
+/* Agent filter: one button per agent, the chosen one rises off the track. */
+.ailm-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-m);
+  background: var(--background-modifier-hover);
+}
+
+.ailm-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-s);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  cursor: pointer;
+  transition: background-color var(--ailm-fast) ease, color var(--ailm-fast) ease, box-shadow var(--ailm-fast) ease;
+}
+
+.ailm-seg:hover {
+  color: var(--text-normal);
+}
+
+.ailm-seg.is-active {
+  background: var(--background-primary);
+  box-shadow: var(--shadow-s);
+  color: var(--text-normal);
+}
+
+.ailm-seg-icon {
+  display: inline-flex;
+}
+
+.ailm-seg-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---- Columns ---------------------------------------------------------------- */
+/* A hidden column shrinks to zero width and the grid animates it; its content keeps its width and is clipped. */
 .ailm-columns {
+  --ailm-list-px: 300px;
+  --ailm-rail-px: 200px;
+  --ailm-list-w: 300px;
+  --ailm-list-h: 5px;
+  --ailm-rail-w: 200px;
+  --ailm-rail-h: 5px;
   display: grid;
-  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  grid-template-columns: var(--ailm-list-w) var(--ailm-list-h) var(--ailm-rail-w) var(--ailm-rail-h) minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
+  transition: grid-template-columns var(--ailm-med) var(--ailm-ease);
 }
+
+/* While a divider is dragged the width follows the pointer, with no easing. */
+.ailm-columns.is-resizing {
+  transition: none;
+}
+
+/* Fixed grid slots, so hiding a column never shifts the others into its place. */
+.ailm-col-list { grid-column: 1; }
+.ailm-handle-list { grid-column: 2; }
+.ailm-col-rail { grid-column: 3; }
+.ailm-handle-rail { grid-column: 4; }
+.ailm-reading { grid-column: 5; }
 
 .ailm-col {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-right: 1px solid var(--background-modifier-border);
+  min-width: 0;
+  overflow: hidden;
+  transition: opacity var(--ailm-med) ease, visibility 0s linear 0s;
 }
 
-.ailm-col:last-child {
-  border-right: none;
+.ailm-col-list > * {
+  min-width: var(--ailm-list-px);
+}
+
+.ailm-col-rail > * {
+  min-width: var(--ailm-rail-px);
+}
+
+.ailm-columns.hide-list > .ailm-col-list,
+.ailm-columns.hide-rail > .ailm-col-rail {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--ailm-fast) ease, visibility 0s linear var(--ailm-med);
+}
+
+.ailm-columns.hide-list > .ailm-handle-list,
+.ailm-columns.hide-rail > .ailm-handle-rail {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Column divider: a hairline that thickens into the accent while it is grabbed. */
+.ailm-handle {
+  position: relative;
+  overflow: hidden;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ailm-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--background-modifier-border);
+  transition: background-color var(--ailm-fast) ease, width var(--ailm-fast) ease, left var(--ailm-fast) ease;
+}
+
+.ailm-handle:hover::before,
+.ailm-handle.is-dragging::before,
+.ailm-handle:focus-visible::before {
+  left: 1px;
+  width: 3px;
+  background: var(--interactive-accent);
+}
+
+.ailm-handle:focus-visible {
+  outline: none;
+}
+
+/* Column headers: the label and the button that hides the column, always in view. */
+.ailm-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 4px 0 0;
+  border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .ailm-count {
@@ -69,15 +218,39 @@
   font-size: var(--font-ui-smaller);
 }
 
+.ailm-icon-btn {
+  flex: none;
+}
+
+/* ---- List ------------------------------------------------------------------- */
 .ailm-list {
   overflow-y: auto;
   flex: 1 1 auto;
+  padding-bottom: 12px;
+}
+
+/* Day headers stay at the top of the list while their logs scroll under them. */
+.ailm-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 12px 14px 4px;
+  background: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
 }
 
 .ailm-row {
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--background-modifier-border);
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 1px 6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: var(--radius-m);
   cursor: pointer;
+  transition: background-color var(--ailm-fast) ease;
 }
 
 .ailm-row:hover {
@@ -88,119 +261,635 @@
   background: var(--background-modifier-active-hover);
 }
 
+/* The accent bar grows from the middle: the click is answered before anything is drawn. */
+.ailm-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--interactive-accent);
+  transform: scaleY(0);
+  transition: transform var(--ailm-med) var(--ailm-ease);
+}
+
+.ailm-row.is-active::before {
+  transform: scaleY(1);
+}
+
 .ailm-row:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: -2px;
 }
 
-.ailm-row-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ailm-row-icon,
-.ailm-live {
+.ailm-avatar {
   display: inline-flex;
   flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
 }
 
-.ailm-row-icon svg,
-.ailm-live svg {
+.ailm-avatar svg {
   width: 14px;
   height: 14px;
 }
 
-.ailm-live {
-  color: var(--text-success);
+.ailm-row-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ailm-row-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 .ailm-row-title {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-weight: var(--font-medium);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .ailm-row-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 10px;
-  margin-top: 2px;
+  align-items: center;
+  gap: 4px 6px;
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
-.ailm-preview-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--background-modifier-border);
+.ailm-row-time {
+  font-variant-numeric: tabular-nums;
 }
 
-.ailm-preview-title {
-  flex: 1 1 auto;
+.ailm-tag {
+  max-width: 100%;
+  padding: 0 6px;
   overflow: hidden;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: var(--font-semibold);
 }
 
-.ailm-follow {
+.ailm-tag-project {
+  color: var(--text-normal);
+}
+
+/* A conversation that is still going: a dot with a ring that spreads and fades. */
+.ailm-live {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--text-success);
+}
+
+.ailm-live::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--text-success);
+  animation: ailm-pulse 1.8s ease-out infinite;
+}
+
+/* Subagent logs sit under the conversation that called them. */
+.ailm-row-child {
+  margin-left: 22px;
+  padding-left: 8px;
+}
+
+.ailm-row-child .ailm-avatar {
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.ailm-row-child .ailm-avatar svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ailm-enter {
+  animation: ailm-enter 160ms var(--ailm-ease) both;
+}
+
+/* Subagent and fork toggles of a conversation sit side by side; each opens its own group. */
+.ailm-sub-toggles {
   display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 4px;
-  font-size: var(--font-ui-smaller);
+  gap: 2px;
+  margin-left: auto;
+}
+
+.ailm-sub-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
   color: var(--text-muted);
 }
 
-.ailm-follow-icon {
+.ailm-sub-kind {
   display: inline-flex;
 }
 
-.ailm-follow-icon svg {
-  width: 14px;
-  height: 14px;
+.ailm-sub-kind svg {
+  width: 12px;
+  height: 12px;
 }
 
-.ailm-toc {
+.ailm-sub-icon {
+  display: inline-flex;
+  transition: transform var(--ailm-fast) var(--ailm-ease);
+}
+
+.ailm-sub-toggle.is-open .ailm-sub-icon {
+  transform: rotate(90deg);
+}
+
+.ailm-sub-count {
+  font-size: var(--font-ui-smaller);
+  font-variant-numeric: tabular-nums;
+}
+
+.ailm-pagination-wrap {
   display: flex;
-  flex-wrap: nowrap;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--background-modifier-border);
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  font-size: var(--font-ui-smaller);
 }
 
-.ailm-toc:empty {
+/* ---- Empty and loading states ---------------------------------------------- */
+.ailm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.ailm-empty-icon {
+  display: inline-flex;
+  color: var(--text-faint);
+}
+
+.ailm-empty-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ailm-empty-title {
+  font-weight: var(--font-medium);
+}
+
+.ailm-empty-hint {
+  max-width: 34ch;
+  color: var(--text-faint);
+  font-size: var(--font-ui-small);
+}
+
+.ailm-empty-action {
+  margin: 0 auto;
+}
+
+.ailm-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 46rem;
+}
+
+.ailm-skeleton-line {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--background-modifier-hover) 25%, var(--background-modifier-border) 50%, var(--background-modifier-hover) 75%);
+  background-size: 200% 100%;
+  animation: ailm-shimmer 1.4s linear infinite;
+}
+
+/* ---- Timeline rail of the turns -------------------------------------------- */
+.ailm-col-rail {
+  background: var(--background-secondary);
+}
+
+.ailm-col-rail .ailm-rail {
+  flex: 1 1 auto;
+}
+
+.ailm-rail {
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 10px 0 16px;
+  background: var(--background-secondary);
+}
+
+.ailm-rail.is-empty {
   display: none;
 }
 
-.ailm-toc-item {
-  flex: none;
-  max-width: 260px;
+.ailm-rail-day {
+  padding: 8px 14px 4px;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-semibold);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Each turn is a stop on a vertical line: the line is the conversation, the dot the turn. */
+.ailm-rail-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3.2em minmax(0, 1fr);
+  gap: 8px;
+  padding: 5px 12px 5px 26px;
+  font-size: var(--font-ui-smaller);
+  line-height: 1.35;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--ailm-fast) ease, background-color var(--ailm-fast) ease;
+}
+
+.ailm-rail-item::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--background-modifier-border);
+}
+
+.ailm-rail-item::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 10px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  border: 1px solid var(--text-faint);
+  transition: background-color var(--ailm-fast) ease, border-color var(--ailm-fast) ease, box-shadow var(--ailm-med) ease;
+}
+
+.ailm-rail-item:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.ailm-rail-item:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+.ailm-rail-item.is-current {
+  color: var(--text-normal);
+}
+
+.ailm-rail-item.is-current::after {
+  background: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+  box-shadow: 0 0 0 3px var(--background-modifier-hover);
+}
+
+.ailm-rail-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+}
+
+.ailm-rail-item.is-current .ailm-rail-time {
+  color: var(--text-accent);
+}
+
+.ailm-rail-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Reading area ------------------------------------------------------------ */
+.ailm-reading {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ailm-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ailm-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  align-self: stretch;
+}
+
+.ailm-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--ailm-fast) ease, border-color var(--ailm-med) var(--ailm-ease);
+}
+
+.ailm-tab:hover {
+  color: var(--text-normal);
+}
+
+.ailm-tab.is-active {
+  color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent);
+}
+
+.ailm-tab-icon {
+  display: inline-flex;
+}
+
+.ailm-tab-icon svg {
+  width: var(--icon-s);
+  height: var(--icon-s);
+}
+
+.ailm-open {
+  margin-left: auto;
+}
+
+.ailm-dock {
+  display: flex;
+  gap: 4px;
+}
+
+.ailm-dock-list,
+.ailm-dock-rail {
+  display: none;
+}
+
+.ailm-columns.hide-list .ailm-dock-list,
+.ailm-columns.rail-hidden-by-user:not(.mode-jsonl) .ailm-dock-rail {
+  display: flex;
+}
+
+/* Title and facts of the open log; it changes in the same frame as the click. */
+.ailm-doc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ailm-doc-head.is-empty {
+  display: none;
+}
+
+.ailm-doc-head .ailm-avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.ailm-doc-head .ailm-avatar svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ailm-doc-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ailm-doc-title {
+  overflow: hidden;
+  font-size: var(--font-ui-medium);
+  font-weight: var(--font-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ailm-doc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
+}
+
+.ailm-doc-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-success);
+}
+
+.ailm-doc-live .ailm-live {
+  margin-top: 0;
 }
 
 .ailm-preview {
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 16px 56px 48px 24px;
+  transition: opacity var(--ailm-med) ease 90ms;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
-.ailm-empty {
-  padding: 16px 12px;
+/* The next note is loading: the one on screen stays and dims. The delay keeps fast loads from flickering. */
+.ailm-preview.is-loading {
+  opacity: 0.45;
 }
 
-.ailm-small {
+.ailm-doc {
+  max-width: 46rem;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ailm-fade {
+  animation: ailm-fade 200ms var(--ailm-ease) both;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ailm-preview {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ---- JSONL transcript -------------------------------------------------------- */
+.ailm-jsonl-wrap {
+  max-width: none;
+}
+
+.ailm-jsonl-count {
+  margin-bottom: 8px;
+  color: var(--text-muted);
   font-size: var(--font-ui-smaller);
 }
 
-@media (max-width: 900px) {
-  .ailm-columns {
-    grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+.ailm-jsonl-row {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ailm-jsonl-row > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--radius-s);
+  cursor: pointer;
+  font-size: var(--font-ui-small);
+  list-style: none;
+  transition: background-color var(--ailm-fast) ease;
+}
+
+.ailm-jsonl-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ailm-jsonl-row > summary:hover {
+  background: var(--background-modifier-hover);
+}
+
+.ailm-jsonl-row > summary::before {
+  content: "";
+  flex: none;
+  align-self: center;
+  width: 5px;
+  height: 5px;
+  border-right: 1.5px solid var(--text-faint);
+  border-bottom: 1.5px solid var(--text-faint);
+  transform: rotate(-45deg);
+  transition: transform var(--ailm-fast) var(--ailm-ease);
+}
+
+.ailm-jsonl-row[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.ailm-jsonl-n {
+  flex: none;
+  min-width: 3.5ch;
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ailm-jsonl-type {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--radius-s);
+  background: var(--background-modifier-hover);
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
+
+.ailm-jsonl-type-user { color: var(--color-blue); }
+.ailm-jsonl-type-assistant { color: var(--color-green); }
+
+.ailm-jsonl-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.ailm-jsonl-body {
+  margin: 4px 0 8px;
+  padding: 8px;
+  max-height: 480px;
+  overflow: auto;
+  border-radius: var(--radius-s);
+  background: var(--background-secondary);
+  font-size: var(--font-ui-smaller);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ailm-jsonl-more {
+  margin: 12px 0;
+}
+
+/* ---- Motion ------------------------------------------------------------------ */
+@keyframes ailm-pulse {
+  from { opacity: 0.55; transform: scale(1); }
+  to { opacity: 0; transform: scale(2.6); }
+}
+
+@keyframes ailm-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ailm-fade {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ailm-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ailm-logs *,
+  .ailm-logs *::before,
+  .ailm-logs *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }

@@ -68,3 +68,8 @@
 .ailm-status-error {
   color: var(--text-error);
 }
+
+/* Fallback fill in case another plugin registered ai-logo-gemini with url(#ai-logo-gemini-grad) and the first SVG in the DOM is inside display: none. */
+svg.ai-logo-gemini path {
+  fill: #4796E3;
+}

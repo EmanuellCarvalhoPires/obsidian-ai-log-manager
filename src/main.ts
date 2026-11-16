@@ -1,16 +1,23 @@
 // Entry point of the AI Log Manager plugin.
 import * as os from "node:os";
+import { registerAgentLogos } from "./ui-agent-logos";
 import * as nodeFs from "node:fs/promises";
-import { FileSystemAdapter, Notice, Plugin, setIcon } from "obsidian";
+import { FileSystemAdapter, Notice, Plugin, TFile, setIcon } from "obsidian";
 import { createCheckpointStorage } from "./adapters/checkpoint-storage";
 import { createNodeDisk } from "./adapters/node-disk";
+import { createNodeSqlite } from "./adapters/node-sqlite";
+import { AntigravitySync } from "./core/antigravity-sync";
 import { collectLogSources } from "./adapters/log-sources";
 import { ObsidianVaultPort } from "./adapters/obsidian-vault";
 import { CheckpointStore } from "./core/checkpoints";
+import { buildIndex } from "./core/log-index";
+import type { LogRecord } from "./core/log-index";
+import { resolveSourceFile } from "./core/log-source-file";
+import type { SourceFile } from "./core/log-source-file";
 import { LogEngine } from "./core/engine";
 import { HookHandler } from "./core/hook-handler";
 import { DEFAULT_LOG_SETTINGS } from "./core/ports";
-import type { LogSettings } from "./core/ports";
+import type { DiskPort, LogSettings } from "./core/ports";
 import { ProjectCreator } from "./core/project-creator";
 import type { TemplateNoteCreator } from "./core/project-creator";
 import { ProjectTracker } from "./core/project-tracker";
@@ -21,12 +28,17 @@ import { EcosystemConnector } from "./ecosystem/connector";
 import type { ConnectorStatus } from "./ecosystem/connector";
 import { MissingEcosystemModal } from "./ecosystem/dependency-modal";
 import { createSetupHandler, registerSetupHandler } from "./ecosystem/setup";
-import { AI_ECOSYSTEM_API_VERSION } from "./ecosystem/types";
+import { AI_ECOSYSTEM_API_VERSION, SECRETS_SERVICE } from "./ecosystem/types";
+import type { SecretVaultService } from "./ecosystem/types";
 import hookScript from "./hook/ai-log-manager-hook.mjs";
-import { hooksInstalled, mergeHooks } from "./hook/hook-installer";
-import type { ClaudeSettings } from "./hook/hook-installer";
+import {
+  SpoolDrainer,
+  applyClaudeHooksSafe,
+  checkNodeInPath,
+  hooksInstalled,
+  readClaudeSettingsSafe,
+} from "./hook/hook-installer";
 import { t } from "./i18n";
-import { stripBom } from "./core/text-utils";
 import { MODULE_ID, MODULE_INSTRUCTIONS, buildRoutes, buildTools } from "./tools/log-module";
 import { confirm } from "./ui/confirm-modal";
 import { LOGS_VIEW_TYPE, LogsView } from "./ui/logs-view";
@@ -48,7 +60,6 @@ function normalizeSettings(raw: unknown): LogSettings {
   return settings;
 }
 
-
 export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   settings: LogSettings = { ...DEFAULT_LOG_SETTINGS };
 
@@ -57,6 +68,7 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   private tracker!: ProjectTracker;
   private locator!: SessionLocator;
   private hookHandler!: HookHandler;
+  private spoolDrainer!: SpoolDrainer;
   private unregisterSetupHandler: (() => void) | undefined;
   private connector!: EcosystemConnector;
   private settingTab: AILogManagerSettingTab | undefined;
@@ -64,10 +76,13 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
   private statusIconEl: HTMLElement | undefined;
   private statusTextEl: HTMLElement | undefined;
   private transcriptWatcher: FolderWatcher | undefined;
+  private antigravity!: AntigravitySync;
+  private antigravityWatchers: FolderWatcher[] = [];
   private spoolWatcher: FolderWatcher | undefined;
   private hooksOk = false;
 
   async onload(): Promise<void> {
+    registerAgentLogos();
     this.settings = normalizeSettings(await this.loadData());
     const disk = createNodeDisk();
     const vault = new ObsidianVaultPort(this.app);
@@ -82,13 +97,27 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       }),
       () => Date.now(),
     );
+    // Gemini (Antigravity) conversations are read from their SQLite file, not from a JSONL transcript.
+    this.antigravity = new AntigravitySync({
+      db: createNodeSqlite(),
+      disk,
+      vault,
+      tracker: this.tracker,
+      store: this.store,
+      settings: () => this.settings,
+      appFolders: () => this.antigravityAppFolders(),
+      redact: (text) => this.redactWithSecretsService(text),
+      log: (message, detail) => console.debug("[AI Log Manager]", message, detail),
+    });
     this.engine = new LogEngine({
+      antigravity: this.antigravity,
       disk,
       vault,
       locator: this.locator,
       tracker: this.tracker,
       store: this.store,
       settings: () => this.settings,
+      redact: (text) => this.redactWithSecretsService(text),
       log: (message, detail) => console.debug("[AI Log Manager]", message, detail),
     });
     const creator = new ProjectCreator(vault, () => this.settings, () => this.templates());
@@ -109,6 +138,19 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       },
       (name) => new Notice(t("project.created", { name })),
     );
+    this.spoolDrainer = new SpoolDrainer(
+      () => this.spoolDir(),
+      (event) => this.hookHandler.handle(event),
+      () => Date.now(),
+      (name, err) => console.debug("[AI Log Manager] Spool event failed", name, err),
+    );
+
+    // LM-18: mark session as ignored when the user deletes its log note.
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (file instanceof TFile) this.engine.onNoteDeleted(file.path);
+      }),
+    );
 
     this.setupStatusBar();
     this.connector = new EcosystemConnector(this, {
@@ -120,7 +162,11 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
           store: this.store,
           hooks: this.hookHandler,
           settings: () => this.settings,
-          runtime: () => ({ watching: this.transcriptWatcher !== undefined, hooksInstalled: this.hooksOk, connected: this.connector.isConnected() }),
+          runtime: () => ({
+            watching: this.transcriptWatcher?.isActive() === true,
+            hooksInstalled: this.hooksOk,
+            connected: this.connector.isConnected(),
+          }),
         };
         return {
           id: MODULE_ID,
@@ -160,7 +206,14 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     });
     this.connector.start();
 
-    this.registerView(LOGS_VIEW_TYPE, (leaf) => new LogsView(leaf));
+    this.registerView(
+      LOGS_VIEW_TYPE,
+      (leaf) =>
+        new LogsView(leaf, {
+          resolveSource: (path, record) => this.resolveSource(path, record, disk),
+          readText: (path) => disk.readText(path),
+        }),
+    );
     this.addRibbonIcon("scroll-text", t("core.cmd.openView"), () => void this.openLogsView());
     this.addCommand({ id: "open-logs-view", name: t("core.cmd.openView"), callback: () => void this.openLogsView() });
     this.addCommand({ id: "reconcile-logs", name: t("core.cmd.syncAll"), callback: () => void this.reconcileNow() });
@@ -174,6 +227,7 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
 
   onunload(): void {
     this.transcriptWatcher?.stop();
+    for (const w of this.antigravityWatchers) w.stop();
     this.spoolWatcher?.stop();
     this.unregisterSetupHandler?.();
     this.connector?.stop();
@@ -197,12 +251,16 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
 
   async hooksInstalled(): Promise<boolean> {
     try {
-      const settings = await this.readClaudeSettings();
+      const { settings } = await readClaudeSettingsSafe(this.claudeSettingsPath());
       this.hooksOk = hooksInstalled(settings, this.hookScriptPath());
     } catch {
       this.hooksOk = false;
     }
     return this.hooksOk;
+  }
+
+  async nodeAvailable(): Promise<boolean> {
+    return checkNodeInPath();
   }
 
   async installHooks(): Promise<void> {
@@ -222,21 +280,10 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     }
   }
 
-  /** Writes the hook script and registers it in the Claude Code settings (a backup is kept). */
+  /** Writes the hook script and registers it in the Claude Code settings safely (LM-01). */
   async applyHooks(): Promise<void> {
     await this.writeHookScript();
-    const file = this.claudeSettingsPath();
-    const settings = await this.readClaudeSettings();
-    const merged = mergeHooks(settings, this.hookScriptPath());
-    if (merged.changed) {
-      try {
-        await nodeFs.copyFile(file, `${file}.ai-log-manager.bak`);
-      } catch {
-        // No settings file yet: nothing to back up.
-      }
-      await nodeFs.mkdir(this.claudeHome(), { recursive: true });
-      await nodeFs.writeFile(file, `${JSON.stringify(merged.settings, null, 2)}\n`, "utf8");
-    }
+    await applyClaudeHooksSafe(this.claudeSettingsPath(), this.hookScriptPath());
     this.hooksOk = true;
   }
 
@@ -260,10 +307,52 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
 
   // ---- Internals ------------------------------------------------------------
 
+  /** Transcript (.jsonl) or Antigravity conversation (.db) a log was made from. */
+  private async resolveSource(path: string, record: LogRecord | undefined, disk: DiskPort): Promise<SourceFile | undefined> {
+    const rec = record ?? buildIndex(collectLogSources(this.app)).find((r) => r.path === path);
+    if (!rec) return undefined;
+    return resolveSourceFile(rec, {
+      exists: (p) => disk.exists(p),
+      fromCheckpoint: (sessao) => this.store.all().find((c) => c.hostSessionId === sessao && c.caminhoTranscript)?.caminhoTranscript,
+      findTranscript: (id) => this.locator.transcriptPath(id),
+      conversationFolders: () => this.antigravityFolders(),
+    });
+  }
+
+  /** `~/.gemini/<app>` of each Antigravity app; the conversations are in `conversations/` inside. */
+  private antigravityAppFolders(): string[] {
+    const home = os.homedir().replace(/\\/g, "/");
+    return ["antigravity", "antigravity-cli", "antigravity-ide"].map((d) => `${home}/.gemini/${d}`);
+  }
+
+  private antigravityFolders(): string[] {
+    return this.antigravityAppFolders().map((app) => `${app}/conversations`);
+  }
+
+  /** Writes `jsonl` / `jsonl_caminho` in the Antigravity logs that do not have them (the files are `<sessao>.db`). */
+  private async backfillAntigravityProps(disk: DiskPort): Promise<void> {
+    for (const rec of buildIndex(collectLogSources(this.app))) {
+      if (rec.agent !== "gemini" || rec.transcript || !rec.sessao) continue;
+      const source = await resolveSourceFile(rec, {
+        exists: (p) => disk.exists(p),
+        fromCheckpoint: () => undefined,
+        findTranscript: () => Promise.resolve(undefined),
+        conversationFolders: () => this.antigravityFolders(),
+      });
+      const file = this.app.vault.getFileByPath(rec.path);
+      if (!source || !file) continue;
+      await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+        fm.jsonl = source.path.split("/").pop();
+        fm.jsonl_caminho = source.path;
+      });
+    }
+  }
+
   private async start(): Promise<void> {
     await this.writeHookScript();
     await this.hooksInstalled();
     this.startWatchers();
+    void this.backfillAntigravityProps(createNodeDisk()).catch((err: unknown) => console.debug("[AI Log Manager] Antigravity properties", err));
     // Decision D2: complete what was missed while Obsidian was closed.
     await this.drainSpool();
     const results = await this.engine.syncAll();
@@ -283,6 +372,16 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
         onChange: (path) => void this.engine.syncTranscript(path),
         onError: (err) => console.debug("[AI Log Manager] Transcript watcher", err),
       });
+      // Gemini: a new step is written to `<id>.db-wal` first, so both files count as a change of `<id>.db`.
+      this.antigravityWatchers = this.antigravityFolders().map((folder) =>
+        watchFolder(folder, {
+          debounceMs: () => this.settings.debounceSeconds * 1000,
+          accept: (name) => name.endsWith(".db") || name.endsWith(".db-wal"),
+          onChange: (path) => void this.antigravity.syncFile(path.replace(/-wal$/, "")),
+          onError: (err) => console.debug("[AI Log Manager] Antigravity watcher", err),
+          retryMs: 0,
+        }),
+      );
     }
     this.spoolWatcher = watchFolder(this.spoolDir(), {
       debounceMs: () => 200,
@@ -292,10 +391,11 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     });
   }
 
-
   private stopWatchers(): void {
     this.transcriptWatcher?.stop();
     this.spoolWatcher?.stop();
+    for (const w of this.antigravityWatchers) w.stop();
+    this.antigravityWatchers = [];
     this.transcriptWatcher = undefined;
     this.spoolWatcher = undefined;
   }
@@ -306,25 +406,17 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     this.updateStatusBar();
   }
 
-  /** Reads the events the hook dropped (also those from while Obsidian was closed). */
+  /** Reads the events the hook dropped (serialized and age-checked via SpoolDrainer, LM-13). */
   private async drainSpool(): Promise<void> {
-    const dir = this.spoolDir();
-    let names: string[];
+    await this.spoolDrainer.drain();
+  }
+
+  private redactWithSecretsService(text: string): string {
     try {
-      names = (await nodeFs.readdir(dir)).filter((n) => n.endsWith(".json")).sort();
+      const secrets = this.connector?.getApi()?.getService<SecretVaultService>(SECRETS_SERVICE);
+      return secrets ? secrets.redact(text) : text;
     } catch {
-      return;
-    }
-    for (const name of names) {
-      const file = `${dir}/${name}`;
-      try {
-        const event = HookHandler.parse(JSON.parse(await nodeFs.readFile(file, "utf8")));
-        await nodeFs.rm(file, { force: true });
-        if (event) await this.hookHandler.handle(event);
-      } catch (err) {
-        console.debug("[AI Log Manager] Spool event failed", name, err);
-        await nodeFs.rm(file, { force: true }).catch(() => undefined);
-      }
+      return text;
     }
   }
 
@@ -342,14 +434,6 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
 
   private claudeSettingsPath(): string {
     return `${this.claudeHome()}/settings.json`;
-  }
-
-  private async readClaudeSettings(): Promise<ClaudeSettings> {
-    try {
-      return JSON.parse(stripBom(await nodeFs.readFile(this.claudeSettingsPath(), "utf8"))) as ClaudeSettings;
-    } catch {
-      return {};
-    }
   }
 
   private pluginDir(): string {
@@ -405,6 +489,7 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
     const suffix = this.settings.mode === "observe" ? " (observe)" : "";
     this.statusTextEl.setText(`${t(`core.status.${status}`)}${status === "connected" ? suffix : ""}`);
   }
+
   private syncToolIndex(): void {
     const api = this.connector?.getApi();
     if (!api?.toolIndex) return;
@@ -415,7 +500,11 @@ export default class AILogManagerPlugin extends Plugin implements SettingsHost {
       store: this.store,
       hooks: this.hookHandler,
       settings: () => this.settings,
-      runtime: () => ({ watching: this.transcriptWatcher !== undefined, hooksInstalled: this.hooksOk, connected: this.connector.isConnected() }),
+      runtime: () => ({
+        watching: this.transcriptWatcher?.isActive() === true,
+        hooksInstalled: this.hooksOk,
+        connected: this.connector.isConnected(),
+      }),
     };
     const tools = buildTools(deps);
     const entries = tools.map((t) => ({

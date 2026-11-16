@@ -9,6 +9,8 @@ export interface FileStat {
 /** Disk access outside the vault (the Claude Code home folder, the spool of the hook). */
 export interface DiskPort {
   readText(path: string): Promise<string>;
+  /** Reads only the bytes after `offset` (UTF-8), for incremental transcript reading (LM-07). */
+  readFrom?(path: string, offset: number): Promise<string>;
   stat(path: string): Promise<FileStat | undefined>;
   /** Names of the entries of a folder; empty when it does not exist. */
   list(path: string): Promise<string[]>;
@@ -48,6 +50,40 @@ export interface VaultPort {
   rename(path: string, newPath: string): Promise<void>;
   /** Makes sure a folder exists. */
   ensureFolder(path: string): Promise<void>;
+  /** Path of the Kanban card with this key (`KAN-8`) inside the cards folder, or undefined (KAN-8). */
+  findKanbanCard?(cardsFolder: string, key: string): string | undefined;
+}
+
+/** One row of the `steps` table of an Antigravity conversation database. */
+export interface ConversationDbStep {
+  stepType: number;
+  /** Protobuf blob of the step. */
+  payload: Uint8Array;
+}
+
+/** One row of `conversation_summaries.db` (the index Antigravity keeps next to the conversations). */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  /** Workspace folders as `file://` URIs. */
+  workspaceUris: string[];
+  /** Epoch ms of the last change, when the index has one. */
+  lastModifiedMs: number | undefined;
+  /** A conversation of a subagent (it has a parent): its text lives in the log of the parent. */
+  nested: boolean;
+}
+
+/**
+ * Read-only access to the SQLite files of Antigravity (the Gemini agent). Implemented in src/adapters/node-sqlite.ts
+ * with Node's built-in `node:sqlite`; every method rejects when SQLite is not available.
+ */
+export interface ConversationDbPort {
+  /** Steps of a conversation database whose type is one of `stepTypes`, in order. */
+  readSteps(dbPath: string, stepTypes: number[]): Promise<ConversationDbStep[]>;
+  /** The protobuf blob of the `trajectory_metadata_blob` table (workspace of the conversation), if any. */
+  readMetadata(dbPath: string): Promise<Uint8Array | undefined>;
+  /** Rows of a `conversation_summaries.db`; empty when the file does not exist. */
+  readSummaries(summariesPath: string): Promise<ConversationSummary[]>;
 }
 
 export interface Clock {
